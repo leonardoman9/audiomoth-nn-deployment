@@ -1,0 +1,90 @@
+experiment_name: test_refractoring_4_classes_lstm_relu6_nfft_512
+
+hydra:
+  run:
+    dir: ./logs/${experiment_name}/${now:%Y-%m-%d_%H-%M-%S}
+  job:
+    name: ${experiment_name}
+
+training:
+  batch_size: 128
+  epochs: 200
+  patience: 10 # Number of epochs to wait before stopping
+  min_delta: 0.001 # Minimum improvement in validation loss to qualify as improvement
+
+model:
+  # _target_: models.streaming.Improved_Phi_GRU_ATT_Streaming
+  _target_: models.streaming_lstm.Improved_Phi_LSTM_ATT_Streaming
+  num_classes: 35
+  n_mel_bins: 64
+  hidden_dim: 64 # Used in GRU & attention modules
+  n_fft: 512
+  hop_length: 160
+  export_mode: false
+
+  matchbox:
+    input_channels: 64 # Match n_mel_bins
+    base_filters: 32 # Sweet spot between 32–64
+    block_filters: 16 # Keeps model small, but expressive
+    dropout_rate: 0.25 # Light dropout for generalization
+    use_se: true
+    expansion_factor: 0.8
+
+    num_blocks: 2
+    sub_blocks_per_block: 2
+
+    kernel_sizes: [7, 5, 3, 3, 3, 5, 3, 1]
+    dilations: [1, 2, 4, 8, 4, 2, 1, 1]
+
+    skip_connections:
+      enable_block_skips: true
+      enable_sub_block_skips: true
+      enable_final_skip: true
+
+  # num_layers: 1
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1e-3
+  weight_decay: 1e-5
+
+# scheduler:
+#   _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+#   mode: min
+#   factor: 0.5
+#   patience: 5
+#   verbose: true
+
+# scheduler:
+#   _target_: torch.optim.lr_scheduler.CosineAnnealingWarmRestarts
+#   T_0: 10           # Number of epochs for the first restart
+#   T_mult: 2         # Increase the period after each restart
+#   eta_min: 1e-6     # Minimum learning rate
+#   verbose: true
+
+scheduler:
+  _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+  T_max: 100 # Adjust based on your total number of epochs
+  eta_min: 5e-6 # Final learning rate value
+  verbose: true
+
+dataset:
+  defaults:
+  preload: true
+  allowed_classes: ["up", "down", "left", "right", "nothing"] # Specify the classes you want to include
+  # allowed_classes: ["go", "stop", "left", "right", "nothing"] # Specify the classes you want to include
+  train:
+    _target_: datasets.SpeechCommandsDataset
+    root_dir: "speech_commands_dataset"
+    subset: "training"
+    augment: true
+  val:
+    _target_: datasets.SpeechCommandsDataset
+    root_dir: "speech_commands_dataset"
+    subset: "validation"
+    augment: false
+  test:
+    _target_: datasets.SpeechCommandsDataset
+    root_dir: "speech_commands_dataset"
+    subset: "testing"
+    augment: false

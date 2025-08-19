@@ -1,0 +1,55 @@
+experiment_name: phi_gru_10_classes
+
+hydra:
+  run:
+    dir: ./logs/${experiment_name}/${now:%Y-%m-%d_%H-%M-%S}
+  job:
+    name: ${experiment_name}
+
+
+training:
+  batch_size: 128
+  epochs: 10
+  patience: 10  # Number of epochs to wait before stopping
+  min_delta: 0.001  # Minimum improvement in validation loss to qualify as improvement
+
+model:
+  _target_: models.Phi_GRU
+  num_classes: 35
+  n_mel_bins: 64
+  hidden_dim: 32
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1e-3
+  weight_decay: 1e-5
+
+scheduler:
+  _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+  mode: min
+  factor: 0.5
+  patience: 5
+  verbose: true
+
+dataset:
+  defaults:
+  preload: false
+  allowed_classes: ["backward", "bed", "bird", "cat", "dog", "down", "eight", "five", "follow", 
+                     "forward", "four", "go", "happy", "house", "learn", "left", "marvin", "nine", 
+                     "no", "off", "on", "one", "right", "seven", "sheila", "six", "stop", "three", 
+                     "tree", "two", "up", "visual", "wow", "yes", "zero"]
+  train:
+    _target_: datasets.SpeechCommandsDataset
+    root_dir: "speech_commands_dataset"
+    subset: "training"
+    augment: true
+  val:
+    _target_: datasets.SpeechCommandsDataset
+    root_dir: "speech_commands_dataset"
+    subset: "validation"
+    augment: false
+  test:
+    _target_: datasets.SpeechCommandsDataset
+    root_dir: "speech_commands_dataset"
+    subset: "testing"
+    augment: false

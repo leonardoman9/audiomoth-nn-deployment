@@ -1,0 +1,95 @@
+experiment_name: phi_gru_mh_hybrid_aug_evenmore_long_training
+
+hydra:
+  run:
+    dir: ./logs/${experiment_name}/${now:%Y-%m-%d_%H-%M-%S}
+  job:
+    name: ${experiment_name}
+
+
+training:
+  batch_size: 128
+  epochs: 200
+  patience: 10  # Number of epochs to wait before stopping
+  min_delta: 0.001  # Minimum improvement in validation loss to qualify as improvement
+
+model:
+  _target_: models.Improved_Phi_FC_Hybrid
+  num_classes: 35
+  n_mel_bins: 64
+  hidden_dim: 32
+  matchbox:
+    input_channels: 64
+    base_filters: 48
+    block_filters: 25
+    dropout_rate: 0.3
+    use_se: true
+    expansion_factor: 0.8
+    
+    # Number of main blocks and sub-blocks
+    num_blocks: 3
+    sub_blocks_per_block: 2
+    
+    # Kernel sizes for each layer (initial_conv, blocks, final_convs)
+    kernel_sizes: [5, 3, 3, 3, 3, 3, 5, 1]
+    
+    # Dilation rates for each layer
+    dilations: [1, 2, 1, 4, 2, 1, 2, 1]
+    
+    # Skip connection configuration
+    skip_connections:
+      enable_block_skips: true
+      enable_sub_block_skips: true
+      enable_final_skip: true
+
+  # num_layers: 1
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1e-3
+  weight_decay: 1e-5
+
+# scheduler:
+#   _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+#   mode: min
+#   factor: 0.5
+#   patience: 5
+#   verbose: true
+
+# scheduler:
+#   _target_: torch.optim.lr_scheduler.CosineAnnealingWarmRestarts
+#   T_0: 10           # Number of epochs for the first restart
+#   T_mult: 2         # Increase the period after each restart
+#   eta_min: 1e-6     # Minimum learning rate
+#   verbose: true
+
+scheduler:
+  _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+  T_max: 100         # Adjust based on your total number of epochs
+  eta_min: 5e-6      # Final learning rate value
+  verbose: true
+
+
+
+dataset:
+  defaults:
+  preload: false
+  allowed_classes: ["backward", "bed", "bird", "cat", "dog", "down", "eight", "five", "follow", 
+                     "forward", "four", "go", "happy", "house", "learn", "left", "marvin", "nine", 
+                     "no", "off", "on", "one", "right", "seven", "sheila", "six", "stop", "three", 
+                     "tree", "two", "up", "visual", "wow", "yes", "zero"]
+  train:
+    _target_: datasets.SpeechCommandsDataset
+    root_dir: "speech_commands_dataset"
+    subset: "training"
+    augment: true
+  val:
+    _target_: datasets.SpeechCommandsDataset
+    root_dir: "speech_commands_dataset"
+    subset: "validation"
+    augment: false
+  test:
+    _target_: datasets.SpeechCommandsDataset
+    root_dir: "speech_commands_dataset"
+    subset: "testing"
+    augment: false

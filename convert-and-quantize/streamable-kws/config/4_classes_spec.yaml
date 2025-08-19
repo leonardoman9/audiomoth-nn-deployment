@@ -1,0 +1,84 @@
+experiment_name: 4_classes_chunked
+hydra:
+  run:
+    dir: ./logs/${experiment_name}/${now:%Y-%m-%d_%H-%M-%S}
+  job:
+    name: ${experiment_name}
+training:
+  batch_size: 128
+  epochs: 200
+  patience: 10 # Number of epochs to wait before stopping
+  min_delta: 0.001 # Minimum improvement in validation loss to qualify as improvement
+model:
+  _target_: models.Improved_Phi_GRU_ATT_Spec
+  num_classes: 35
+  n_mel_bins: 40
+  hidden_dim: 64 # Used in GRU & attention modules
+  matchbox:
+    input_channels: 40 # Match n_mel_bins
+    base_filters: 32 # Sweet spot between 32–64
+    block_filters: 16 # Keeps model small, but expressive
+    dropout_rate: 0.25 # Light dropout for generalization
+    use_se: true
+    expansion_factor: 0.8
+    num_blocks: 2
+    sub_blocks_per_block: 2
+    kernel_sizes: [7, 5, 3, 3, 3, 5, 3, 1]
+    dilations: [1, 2, 4, 8, 4, 2, 1, 1]
+    skip_connections:
+      enable_block_skips: true
+      enable_sub_block_skips: true
+      enable_final_skip: true
+  # num_layers: 1
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1e-3
+  weight_decay: 1e-5
+scheduler:
+  _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+  T_max: 100 # Adjust based on your total number of epochs
+  eta_min: 5e-6 # Final learning rate value
+  verbose: true
+dataset:
+  allowed_classes: ["up", "down", "left", "right"] # Specify the classes you want to include
+  preload: false
+  defaults:
+    # Spectrogram parameters (shared across all dataset splits)
+    return_spectrogram: true
+    n_mel_bins: 40 # Matches model input channels
+    n_fft: 400 # For 16kHz audio (25ms window)
+    hop_length: 160 # For 16kHz audio (10ms hop)
+    win_length: 400 # For 16kHz audio (25ms window)
+  train:
+    _target_: datasets.SpeechCommandsDataset
+    root_dir: "speech_commands_dataset"
+    subset: "training"
+    augment: true
+    # Inherit spectrogram parameters from defaults
+    return_spectrogram: ${dataset.defaults.return_spectrogram}
+    n_mel_bins: ${dataset.defaults.n_mel_bins}
+    n_fft: ${dataset.defaults.n_fft}
+    hop_length: ${dataset.defaults.hop_length}
+    win_length: ${dataset.defaults.win_length}
+  val:
+    _target_: datasets.SpeechCommandsDataset
+    root_dir: "speech_commands_dataset"
+    subset: "validation"
+    augment: false
+    # Inherit spectrogram parameters from defaults
+    return_spectrogram: ${dataset.defaults.return_spectrogram}
+    n_mel_bins: ${dataset.defaults.n_mel_bins}
+    n_fft: ${dataset.defaults.n_fft}
+    hop_length: ${dataset.defaults.hop_length}
+    win_length: ${dataset.defaults.win_length}
+  test:
+    _target_: datasets.SpeechCommandsDataset
+    root_dir: "speech_commands_dataset"
+    subset: "testing"
+    augment: false
+    # Inherit spectrogram parameters from defaults
+    return_spectrogram: ${dataset.defaults.return_spectrogram}
+    n_mel_bins: ${dataset.defaults.n_mel_bins}
+    n_fft: ${dataset.defaults.n_fft}
+    hop_length: ${dataset.defaults.hop_length}
+    win_length: ${dataset.defaults.win_length}

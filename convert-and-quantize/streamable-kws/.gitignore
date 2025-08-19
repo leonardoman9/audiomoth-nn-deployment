@@ -1,0 +1,15 @@
+speech_commands.tar.gz
+speech_commands_dataset
+venv
+__pycache__
+*.pth
+outputs
+results
+logs
+*confusion_matrix.csv
+confusion_matrix.png
+.ropeproject
+test_export.py
+*.png
+ai_edge_export_env
+*.wav
