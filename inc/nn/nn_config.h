@@ -1,56 +1,45 @@
-/*
- * nn_config.h
- *
- *  Created on: 25 May 2024
- *      Author: leonardomannini
- *
- *  Configuration constants for the Neural Network model and audio processing pipeline.
- *  These values are derived from the model training configuration.
- */
+#ifndef NN_CONFIG_H
+#define NN_CONFIG_H
 
-#ifndef INC_NN_NN_CONFIG_H_
-#define INC_NN_NN_CONFIG_H_
-
-/* Compilation flags */
-#ifndef ENABLE_NN
-#define ENABLE_NN 0
+#ifdef __cplusplus
+extern "C" {
 #endif
 
-/* Audio processing parameters (from training config) */
-#define NN_SAMPLE_RATE 32000
-#define NN_CLIP_DURATION_S 3.0f
-#define NN_DECISION_INTERVAL_MS 3000
+// Neural Network Configuration - FULL GRU-64 MODEL WITH DYNAMIC ALLOCATION!
+#define NN_NUM_CLASSES              35      // FULL: 35 classes (complete dataset)
 
-/*
- * The NN pipeline processes audio in small windows.
- * These are NOT the STFT windows, but larger chunks for processing efficiency.
- */
-#define NN_PROCESS_WINDOW_MS 200
-#define NN_PROCESS_WINDOW_SAMPLES (NN_SAMPLE_RATE * NN_PROCESS_WINDOW_MS / 1000) // 6400 samples
+// Model Architecture Configuration - MAXIMUM SPECS WITH GRU-64!
+#define NN_BACKBONE_FEATURES        32      // Base filters: 32
+#define NN_TIME_FRAMES              18      // Time frames: 18
+#define NN_GRU_HIDDEN_DIM           64      // GRU-64: Maximum hidden dimensions!
 
-/* Spectral processing (matches training) */
-#define NN_FFT_SIZE 512
-#define NN_HOP_LENGTH 320
-#define NN_N_MEL_BINS 64
-#define NN_N_LINEAR_FILTERS 64
-#define NN_SPECTRAL_FEATURES (NN_N_MEL_BINS + NN_N_LINEAR_FILTERS) // 128
-#define NN_FREQ_RANGE_LOW 150.0f
-#define NN_FREQ_RANGE_HIGH 16000.0f
+// Input Configuration - ORIGINAL: BACKBONE [1, 18, 40] 
+#define NN_INPUT_HEIGHT             40      // ORIGINAL: 40 mel features (was 12)
+#define NN_INPUT_WIDTH              18      // ORIGINAL: 18 time frames (was 12)  
+#define NN_INPUT_CHANNELS           1       // Single channel spectrogram
 
-/* Model architecture */
-#define NN_NUM_CLASSES 71            // 70 bird species + no_bird
-#define NN_LSTM_HIDDEN_DIM 64
-#define NN_CNN_BASE_FILTERS 32
-#define NN_CNN_LAYERS 3
+// TensorFlow Lite Micro Configuration - VIRTUAL ARENA FOR GRU-64!  
+#define NN_BACKBONE_ARENA_SIZE      (40 * 1024)    // 40KB virtual arena for GRU-64
+#define NN_STREAMING_ARENA_SIZE     (20 * 1024)    // 20KB virtual arena for streaming
 
-/*
- * Memory allocation estimates.
- * WARNING: These are tight and will need careful profiling.
- * The EFM32GG has 32KB of RAM.
- */
-#define NN_CNN_ARENA_SIZE           (15 * 1024)    // 15KB initial estimate
-#define NN_LSTM_ARENA_SIZE          (12 * 1024)    // 12KB initial estimate
-#define NN_SPECTRAL_BUFFER_SIZE     (NN_SPECTRAL_FEATURES * sizeof(int8_t))
-#define NN_STFT_WORKSPACE_SIZE      (NN_FFT_SIZE * 2 * sizeof(float)) // For complex float FFT
+// Flash-based memory extension for larger models
+#define NN_USE_FLASH_SWAP           1              // ENABLED: Flash memory swapping for original model!
+#define NN_FLASH_SWAP_SIZE          (64 * 1024)    // 64KB Flash area for tensor swap
 
-#endif /* INC_NN_NN_CONFIG_H_ */ 
+// Inference Configuration
+#define NN_CONFIDENCE_THRESHOLD     0.7f    // Minimum confidence for detection
+#define NN_MAX_DETECTIONS_PER_SEC   2       // REDUCED: From 5 to 2 detections
+
+// Audio Processing Configuration
+#define NN_SAMPLE_RATE              48000   // AudioMoth sample rate
+#define NN_FRAME_SIZE               1024    // Samples per frame
+#define NN_HOP_LENGTH               512     // Hop length for STFT
+
+// Class Labels (placeholder - to be updated with real bird classes)
+extern const char* NN_CLASS_NAMES[NN_NUM_CLASSES];
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // NN_CONFIG_H

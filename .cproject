@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<?fileVersion 4.0.0?><cproject storage_type_id="org.eclipse.cdt.core.XmlProjectDescriptionStorage">
+	<storageModule moduleId="org.eclipse.cdt.core.settings">
+		<cconfiguration id="com.silabs.ss.framework.ide.project.core.cdtBuildArtefactType.release.1234567890">
+			<storageModule buildSystemId="org.eclipse.cdt.managedbuilder.core.configurationDataProvider" id="com.silabs.ss.framework.ide.project.core.cdtBuildArtefactType.release.1234567890" moduleId="org.eclipse.cdt.core.settings" name="Release">
+				<externalSettings/>
+				<extensions>
+					<extension id="org.eclipse.cdt.core.ELF" point="org.eclipse.cdt.core.BinaryParser"/>
+					<extension id="org.eclipse.cdt.core.GASErrorParser" point="org.eclipse.cdt.core.ErrorParser"/>
+					<extension id="org.eclipse.cdt.core.GmakeErrorParser" point="org.eclipse.cdt.core.ErrorParser"/>
+					<extension id="org.eclipse.cdt.core.GLDErrorParser" point="org.eclipse.cdt.core.ErrorParser"/>
+					<extension id="org.eclipse.cdt.core.CWDLocator" point="org.eclipse.cdt.core.ErrorParser"/>
+					<extension id="org.eclipse.cdt.core.GCCErrorParser" point="org.eclipse.cdt.core.ErrorParser"/>
+				</extensions>
+			</storageModule>
+			<storageModule moduleId="cdtBuildSystem" version="4.0.0">
+				<configuration artifactName="audiomoth" buildProperties="" id="com.silabs.ss.framework.ide.project.core.cdtBuildArtefactType.release.1234567890" name="Release" parent="org.eclipse.cdt.build.core.emptycfg">
+					<folderInfo id="com.silabs.ss.framework.ide.project.core.cdtBuildArtefactType.release.1234567890.folder" name="/" resourcePath="">
+						<toolChain id="com.silabs.ss.framework.ide.project.core.toolchain.gnu.release.1234567890" name="GNU ARM v7.2.1 - Release" superClass="com.silabs.ss.framework.ide.project.core.toolchain.gnu.release">
+							<targetPlatform archList="all" binaryParser="org.eclipse.cdt.core.ELF" id="com.silabs.ss.framework.ide.project.core.toolchain.gnu.release.platform.1234567890" isAbstract="false" osList="all" superClass="com.silabs.ss.framework.ide.project.core.toolchain.gnu.release.platform"/>
+							<builder buildPath="${workspace_loc:/${ProjName}/build}" command="make" id="com.silabs.ss.framework.ide.project.core.toolchain.gnu.release.builder.1234567890" managedBuildOn="false" name="Gnu Make Builder" superClass="com.silabs.ss.framework.ide.project.core.toolchain.gnu.release.builder"/>
+							<tool id="com.silabs.ss.framework.ide.project.core.toolchain.gnu.release.assembler.1234567890" name="GNU ARM Assembler" superClass="com.silabs.ss.framework.ide.project.core.toolchain.gnu.release.assembler">
+								<inputType id="com.silabs.ss.framework.ide.project.core.toolchain.gnu.release.assembler.input.1234567890" superClass="com.silabs.ss.framework.ide.project.core.toolchain.gnu.release.assembler.input"/>
+							</tool>
+							<tool id="com.silabs.ss.framework.ide.project.core.toolchain.gnu.release.c.compiler.1234567890" name="GNU ARM C Compiler" superClass="com.silabs.ss.framework.ide.project.core.toolchain.gnu.release.c.compiler">
+								<option id="com.silabs.ss.framework.ide.project.core.toolchain.gnu.release.c.compiler.include.paths.1234567890" name="Include paths (-I)" superClass="com.silabs.ss.framework.ide.project.core.toolchain.gnu.release.c.compiler.include.paths" valueType="includePath">
+									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/${ProjName}/inc}&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/${ProjName}/inc/nn}&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/${ProjName}/third_party}&quot;"/>
+								</option>
+								<option id="com.silabs.ss.framework.ide.project.core.toolchain.gnu.release.c.compiler.defs.1234567890" name="Defined symbols (-D)" superClass="com.silabs.ss.framework.ide.project.core.toolchain.gnu.release.c.compiler.defs" valueType="definedSymbols">
+									<listOptionValue builtIn="false" value="EFM32WG990F256"/>
+									<listOptionValue builtIn="false" value="DISABLE_GPS_MODULE"/>
+									<listOptionValue builtIn="false" value="ARM_MATH_CM4"/>
+								</option>
+								<inputType id="com.silabs.ss.framework.ide.project.core.toolchain.gnu.release.c.compiler.input.1234567890" superClass="com.silabs.ss.framework.ide.project.core.toolchain.gnu.release.c.compiler.input"/>
+							</tool>
+							<tool id="com.silabs.ss.framework.ide.project.core.toolchain.gnu.release.c.linker.1234567890" name="GNU ARM C Linker" superClass="com.silabs.ss.framework.ide.project.core.toolchain.gnu.release.c.linker">
+								<inputType id="com.silabs.ss.framework.ide.project.core.toolchain.gnu.release.c.linker.input.1234567890" superClass="com.silabs.ss.framework.ide.project.core.toolchain.gnu.release.c.linker.input">
+									<additionalInput kind="additionalinputdependency" paths="$(USER_OBJS)"/>
+									<additionalInput kind="additionalinput" paths="$(LIBS)"/>
+								</inputType>
+							</tool>
+						</toolChain>
+					</folderInfo>
+				</configuration>
+			</storageModule>
+			<storageModule moduleId="org.eclipse.cdt.core.externalSettings"/>
+		</cconfiguration>
+	</storageModule>
+	<storageModule moduleId="cdtBuildSystem" version="4.0.0">
+		<project id="audiomoth-nn-deployment.null.1234567890" name="audiomoth-nn-deployment"/>
+	</storageModule>
+	<storageModule moduleId="scannerConfiguration">
+		<autodiscovery enabled="true" problemReportingEnabled="true" selectedProfileId=""/>
+	</storageModule>
+	<storageModule moduleId="org.eclipse.cdt.core.LanguageSettingsProviders"/>
+</cproject>

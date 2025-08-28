@@ -1,124 +1,121 @@
-/*
- * nn_model.h
- *
- *  Created on: 25 May 2024
- *      Author: leonardomannini
- *
- *  Public API for the Neural Network inference engine.
- */
-
-#ifndef INC_NN_NN_MODEL_H_
-#define INC_NN_NN_MODEL_H_
+#ifndef NN_MODEL_H
+#define NN_MODEL_H
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <math.h>
 #include "nn_config.h"
 
-/* Result enumeration for API functions */
-typedef enum {
-    NN_SUCCESS = 0,
-    NN_ERROR_INIT_FAILED,
-    NN_ERROR_MEMORY_INSUFFICIENT,
-    NN_ERROR_MODEL_INVALID,
-    NN_ERROR_INFERENCE_FAILED,
-    NN_ERROR_FEATURE_EXTRACTION_FAILED
-} NN_Result_t;
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-/* Structure to hold a classification decision */
+// Forward declarations for TensorFlow Lite Micro types
+typedef struct TfLiteTensor TfLiteTensor;
+typedef struct TfLiteModel TfLiteModel;
+typedef struct TfLiteInterpreter TfLiteInterpreter;
+
+// Neural Network State
+typedef enum {
+    NN_STATE_UNINITIALIZED = 0,
+    NN_STATE_INITIALIZED,
+    NN_STATE_READY,
+    NN_STATE_ERROR
+} NN_State_t;
+
+// Detection Result
 typedef struct {
-    uint8_t predicted_class;
+    uint8_t class_id;
     float confidence;
-    float logits[NN_NUM_CLASSES];
-    uint32_t processing_time_ms;
-    uint32_t arena_used_bytes_cnn;
-    uint32_t arena_used_bytes_lstm;
+    uint32_t timestamp_ms;
+    bool valid;
+} NN_Detection_t;
+
+// Decision Result (can contain multiple detections)
+typedef struct {
+    NN_Detection_t detections[NN_MAX_DETECTIONS_PER_SEC];
+    uint8_t num_detections;
+    uint32_t frame_id;
 } NN_Decision_t;
 
-/**
- * @brief Initializes the entire NN pipeline.
- *
- * This function must be called once at startup. It sets up TFLite Micro,
- * allocates memory for arenas, loads the models, and prepares the
- * spectral processing module.
- *
- * @return NN_SUCCESS on success, or an error code otherwise.
- */
-NN_Result_t NN_Init(void);
+// External model data (defined in model_data.c files)
+extern const unsigned char backbone_model_data[];
+extern const unsigned int backbone_model_data_len;
+extern const unsigned char streaming_model_data[];
+extern const unsigned int streaming_model_data_len;
+
+// Public API Functions
 
 /**
- * @brief De-initializes the NN pipeline and frees resources.
+ * Initialize the neural network system
+ * @return true if successful, false otherwise
+ */
+bool NN_Init(void);
+
+/**
+ * Deinitialize the neural network system
  */
 void NN_Deinit(void);
 
 /**
- * @brief Resets the state of the streaming inference.
- *
- * This should be called before starting a new, independent audio clip analysis.
- * It clears the LSTM hidden state (h,c) and any accumulated features or logits.
- *
- * @return NN_SUCCESS on success.
+ * Reset the streaming state (call at start of new recording)
  */
-NN_Result_t NN_ResetStreamState(void);
+void NN_ResetStreamState(void);
 
 /**
- * @brief Processes a window of audio samples.
- *
- * This is the main workhorse function. It takes a chunk of audio, performs
- * STFT and feature extraction, runs the CNN and LSTM models, and accumulates
- * results.
- *
- * @param audio_samples Pointer to an array of 16-bit audio samples.
- * @param num_samples The number of samples in the array.
- * @return NN_SUCCESS on success, or an error code otherwise.
+ * Process audio data through the neural network
+ * @param audio_data Pointer to audio samples (16-bit PCM)
+ * @param num_samples Number of samples in the buffer
+ * @param decision Output decision structure
+ * @return true if processing successful, false otherwise
  */
-NN_Result_t NN_ProcessAudio(const int16_t* audio_samples, uint32_t num_samples);
+bool NN_ProcessAudio(const int16_t* audio_data, uint32_t num_samples, NN_Decision_t* decision);
 
 /**
- * @brief Checks if a new classification decision is ready.
- *
- * A decision is typically ready after processing a full clip duration
- * (e.g., 3 seconds).
- *
- * @return true if a new decision is available, false otherwise.
+ * Get current neural network state
+ * @return Current state
  */
-bool NN_HasNewDecision(void);
+NN_State_t NN_GetState(void);
 
 /**
- * @brief Retrieves the last computed classification decision.
- *
- * This function should be called after NN_HasNewDecision() returns true.
- *
- * @param decision Pointer to an NN_Decision_t struct to be filled.
- * @return NN_SUCCESS if a decision was retrieved, NN_ERROR_INFERENCE_FAILED otherwise.
+ * Get memory usage statistics
  */
-NN_Result_t NN_GetLastDecision(NN_Decision_t* decision);
+uint32_t NN_GetBackboneArenaUsedBytes(void);
+uint32_t NN_GetStreamingArenaUsedBytes(void);
 
 /**
- * @brief Retrieves the names of the classes.
- *
- * @return A constant array of constant strings representing the class names.
+ * Get inference timing statistics (in microseconds)
  */
-const char* const* NN_GetClassNames(void);
-
-/* --- Debug and Monitoring Functions --- */
+uint32_t NN_GetLastInferenceTime(void);
 
 /**
- * @brief Gets the peak memory usage of the CNN tensor arena.
- * @return Peak bytes used in the CNN arena.
+ * Run performance test sequence: LED → 10 inferences → pause → 100 → pause → 1000 → LED
  */
-uint32_t NN_GetCNNArenaUsedBytes(void);
+void NN_runPerformanceTestSequence(const int16_t* audio_data, uint32_t num_samples);
 
 /**
- * @brief Gets the peak memory usage of the LSTM tensor arena.
- * @return Peak bytes used in the LSTM arena.
+ * Set seed for dummy data generation (for reproducible testing)
  */
-uint32_t NN_GetLSTMArenaUsedBytes(void);
+void NN_setDummySeed(uint32_t seed);
 
 /**
- * @brief Estimates the amount of free RAM.
- * This is a rough estimate based on the current stack pointer.
- * @return Estimated free bytes.
+ * Flash-based memory swap functions for larger models
  */
-uint32_t NN_GetFreeRAM(void);
+bool NN_FlashSwap_Init(void);
+int NN_FlashSwap_AllocateSlot(uint32_t size);
+bool NN_FlashSwap_StoreTensor(int slot_id, const void* data, uint32_t size);
+bool NN_FlashSwap_LoadTensor(int slot_id, void* data, uint32_t size);
+void NN_FlashSwap_FreeSlot(int slot_id);
 
-#endif /* INC_NN_NN_MODEL_H_ */
+/**
+ * Swap arena management for large model support
+ */
+bool NN_SwapArena_Init(void);
+uint8_t* NN_SwapArena_GetBuffer(int tensor_id, uint32_t size);
+void NN_SwapArena_MarkDirty(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // NN_MODEL_H

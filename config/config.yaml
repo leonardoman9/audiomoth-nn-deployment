@@ -1,0 +1,11 @@
+# Config principale per export ONNX
+defaults:
+  - 4_classes_chunked
+
+# Override per export ONNX  
+model_path: "path/to/your/model.pth"
+output_dir: "logs/export_nfft_128_all_classes"
+
+# Parametri export
+batch_size: 1
+sequence_length: 18

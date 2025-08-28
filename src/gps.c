@@ -4,6 +4,50 @@
  * July 2021
  *****************************************************************************/
 
+#include "audiomoth.h"
+
+#ifdef DISABLE_GPS_MODULE
+
+/* GPS DISABLED - Stub functions to save ~9KB Flash for NN models */
+
+#include "gps.h"
+#include "sunrise.h"
+
+void GPS_powerUpGPS() { /* stub */ }
+void GPS_powerDownGPS() { /* stub */ } 
+void GPS_enableGPSInterface() { /* stub */ }
+void GPS_disableGPSInterface() { /* stub */ }
+
+GPS_fixResult_t GPS_setTimeFromGPS(uint32_t timeout) { 
+    return GPS_CANCELLED_BY_SWITCH; 
+}
+
+void GPS_cancelTimeSetting(GPS_fixCancellationReason_t reason) { /* stub */ }
+
+inline void GPS_handleFixEvent(uint32_t time, uint32_t milliseconds, GPS_fixTime_t *fixTime, GPS_fixPosition_t *fixPosition, char *message) { /* stub */ }
+inline void GPS_handleMessageEvent(uint32_t time, uint32_t milliseconds, char *message) { /* stub */ }
+inline void GPS_handleMagneticSwitchInterrupt() { /* stub */ }
+inline void GPS_handleGetTime(uint32_t *time, uint32_t *milliseconds) { /* stub */ }
+
+void GPIO_ODD_IRQHandler(void) { /* stub - no GPS interrupt handling */ }
+
+/* Additional GPS functions needed by main.c */
+void GPS_enableMagneticSwitch(void) { /* stub */ }
+bool GPS_isMagneticSwitchClosed(void) { return false; /* stub */ }
+
+/* Sunrise calculation stub */
+void Sunrise_calculateFromUnix(SR_event_t event, uint32_t currentTime, float latitude, float longitude, SR_solution_t *solution, SR_trend_t *trend, uint32_t *sunriseMinutes, uint32_t *sunsetMinutes) {
+    /* stub - no sunrise calculation in NN mode */
+    *solution = SR_SUN_BELOW_HORIZON;
+    *trend = SR_DAY_EQUAL_TO_NIGHT; 
+    *sunriseMinutes = 0;
+    *sunsetMinutes = 0;
+}
+
+#else
+
+/* ORIGINAL GPS IMPLEMENTATION */
+
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -404,3 +448,5 @@ void GPS_cancelTimeSetting(GPS_fixCancellationReason_t reason) {
     if (reason == GPS_CANCEL_BY_MAGNETIC_SWITCH) cancelledByMagneticSwitch = true;
 
 }
+
+#endif /* DISABLE_GPS_MODULE */
