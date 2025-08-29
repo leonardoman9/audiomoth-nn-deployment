@@ -315,6 +315,13 @@ void SystemInit(void)
   SCB->CPACR |= ((3UL << 10*2) |                    /* set CP10 Full Access */
                  (3UL << 11*2)  );                  /* set CP11 Full Access */
 #endif
+
+  /* CRITICAL FIX: Set Vector Table Offset Register to our vectors location */
+  /* With our linker script, vectors are at 0x4000, not default 0x0000 */
+  extern uint32_t __Vectors;  // Symbol from linker script
+  SCB->VTOR = (uint32_t)&__Vectors;
+  __DSB();  // Data Synchronization Barrier
+  __ISB();  // Instruction Synchronization Barrier
 }
 
 

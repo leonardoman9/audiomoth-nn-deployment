@@ -1,15 +1,12 @@
 #include "../../inc/nn/nn_model.h"
 #include "../../third_party/tflm_wrapper.h"
 #include "../../inc/audiomoth.h"  // For LED functions
-#include "virtual_arena.h"  // Virtual memory management
+#include "tensor_arena.h"  // External SRAM tensor arena
 #include <string.h>
 #include <math.h>
 #include <stdlib.h>  // For malloc/free
 
-// Virtual Arena functions (when Flash Swap enabled)
-#if NN_USE_FLASH_SWAP
-// Now using Virtual Arena instead of old Flash Swap
-#endif
+// External SRAM tensor arena - replaces old Flash virtual arena
 
 // Include external model data arrays
 extern const unsigned char backbone_model_data[];
@@ -26,19 +23,22 @@ static TFLMModel g_streaming_model = NULL;
 static TFLMInterpreter g_backbone_interpreter = NULL;
 static TFLMInterpreter g_streaming_interpreter = NULL;
 
-// Memory arenas - dynamically allocated to avoid .bss bloat
-#if NN_USE_FLASH_SWAP
-static uint8_t* g_backbone_arena = NULL;   // Will malloc 6KB for GRU-64
-static uint8_t* g_streaming_arena = NULL;  // Will malloc 3KB
-#else
-static uint8_t g_backbone_arena[NN_BACKBONE_ARENA_SIZE];
-static uint8_t g_streaming_arena[NN_STREAMING_ARENA_SIZE];
-#endif
+// Memory arenas - use external SRAM via tensor arena
+static uint8_t* g_backbone_arena = NULL;   // Will point to external SRAM
+static uint8_t* g_streaming_arena = NULL;  // Will point to external SRAM
 
 // Streaming state - dynamically allocated for GRU-64
 static float* g_gru_hidden_state = NULL;  // Will malloc for GRU-64
 static uint32_t g_frame_counter = 0;
 static uint32_t g_last_inference_time_us = 0;
+
+// Dynamic buffers allocated from external SRAM to avoid BSS bloat
+static float* g_spectrogram_buffer = NULL;
+static float* g_backbone_features_buffer = NULL;
+static float* g_accumulated_logits_buffer = NULL;
+static float* g_step_logits_buffer = NULL;
+static float* g_new_hidden_state_buffer = NULL;
+static float* g_att_scores_buffer = NULL;
 
 // Simple PRNG for dummy data generation
 static uint32_t g_dummy_seed = 12345;
@@ -76,100 +76,129 @@ bool NN_Init(void) {
     
     // DEBUG: Signal entering NN_Init (BREAKPOINT: Line 66)
     AudioMoth_setRedLED(true);
-    AudioMoth_delay(50);
+    // AudioMoth_delay - REMOVED to avoid timer hang(50);
     AudioMoth_setRedLED(false);
     
     // FLASH SWAP APPROACH: Initialize Flash-based virtual memory system
     AudioMoth_setGreenLED(true);
-    AudioMoth_delay(25);
+    // AudioMoth_delay - REMOVED to avoid timer hang(25);
     AudioMoth_setGreenLED(false);
     
-#if NN_USE_FLASH_SWAP
-    // DEBUG: Signal Flash Swap initialization
+    // DEBUG: Signal External SRAM initialization
     AudioMoth_setGreenLED(true);
-    AudioMoth_setRedLED(true);  // Both LEDs = Flash Swap mode
-    AudioMoth_delay(100);
+    AudioMoth_setRedLED(true);  // Both LEDs = External SRAM mode
+    // AudioMoth_delay - REMOVED to avoid timer hang(100);
     AudioMoth_setGreenLED(false);
     AudioMoth_setRedLED(false);
     
-    // Allocate memory dynamically for GRU-64 support
-    g_backbone_arena = (uint8_t*)malloc(6 * 1024);    // 6KB for larger tensors
-    g_streaming_arena = (uint8_t*)malloc(3 * 1024);   // 3KB for streaming
-    g_gru_hidden_state = (float*)malloc(NN_GRU_HIDDEN_DIM * sizeof(float));
+    // Initialize external SRAM tensor arena
+    if (!TensorArena_Init()) {
+        // DEBUG: External SRAM init failed - 10 red blinks
+        for (int i = 0; i < 10; i++) {
+            AudioMoth_setRedLED(true);
+            // AudioMoth_delay - REMOVED to avoid timer hang(150);
+            AudioMoth_setRedLED(false);
+            // AudioMoth_delay - REMOVED to avoid timer hang(150);
+        }
+        g_nn_state = NN_STATE_ERROR;
+        return false;
+    }
     
-    if (!g_backbone_arena || !g_streaming_arena || !g_gru_hidden_state) {
-        // Memory allocation failed - cleanup and signal error
-        if (g_backbone_arena) free(g_backbone_arena);
-        if (g_streaming_arena) free(g_streaming_arena);
-        if (g_gru_hidden_state) free(g_gru_hidden_state);
-        
-        // Signal allocation failure - 5 fast red blinks
+    // Get external SRAM buffer and partition it
+    uint8_t* arena_buffer = TensorArena_GetBuffer();
+    uint32_t arena_size = TensorArena_GetSize();
+    
+    if (!arena_buffer || arena_size < (NN_BACKBONE_ARENA_SIZE + NN_STREAMING_ARENA_SIZE)) {
+        // Not enough external SRAM - signal error
         for (int i = 0; i < 5; i++) {
             AudioMoth_setRedLED(true);
-            AudioMoth_delay(50);
+            // AudioMoth_delay - REMOVED to avoid timer hang(50);
             AudioMoth_setRedLED(false);
-            AudioMoth_delay(50);
+            // AudioMoth_delay - REMOVED to avoid timer hang(50);
         }
+        g_nn_state = NN_STATE_ERROR;
+        return false;
+    }
+    
+    // Partition external SRAM: first part for backbone, second for streaming
+    g_backbone_arena = arena_buffer;
+    g_streaming_arena = arena_buffer + NN_BACKBONE_ARENA_SIZE;
+    
+    // Allocate working buffers from internal RAM (malloc) to avoid BSS bloat
+    g_gru_hidden_state = (float*)malloc(NN_GRU_HIDDEN_DIM * sizeof(float));
+    g_spectrogram_buffer = (float*)malloc(NN_INPUT_HEIGHT * NN_INPUT_WIDTH * sizeof(float));
+    g_backbone_features_buffer = (float*)malloc(NN_BACKBONE_FEATURES * NN_TIME_FRAMES * sizeof(float));
+    g_accumulated_logits_buffer = (float*)malloc(NN_NUM_CLASSES * sizeof(float));
+    g_step_logits_buffer = (float*)malloc(NN_NUM_CLASSES * sizeof(float));
+    g_new_hidden_state_buffer = (float*)malloc(NN_GRU_HIDDEN_DIM * sizeof(float));
+    g_att_scores_buffer = (float*)malloc(NN_TIME_FRAMES * sizeof(float));
+    
+    if (!g_gru_hidden_state || !g_spectrogram_buffer || !g_backbone_features_buffer ||
+        !g_accumulated_logits_buffer || !g_step_logits_buffer || !g_new_hidden_state_buffer || !g_att_scores_buffer) {
         g_nn_state = NN_STATE_ERROR;
         return false;
     }
     
     // Clear allocated memory
-    memset(g_backbone_arena, 0, 6 * 1024);
-    memset(g_streaming_arena, 0, 3 * 1024);
+    memset(g_backbone_arena, 0, NN_BACKBONE_ARENA_SIZE);
+    memset(g_streaming_arena, 0, NN_STREAMING_ARENA_SIZE);
     memset(g_gru_hidden_state, 0, NN_GRU_HIDDEN_DIM * sizeof(float));
+    memset(g_spectrogram_buffer, 0, NN_INPUT_HEIGHT * NN_INPUT_WIDTH * sizeof(float));
+    memset(g_backbone_features_buffer, 0, NN_BACKBONE_FEATURES * NN_TIME_FRAMES * sizeof(float));
+    memset(g_accumulated_logits_buffer, 0, NN_NUM_CLASSES * sizeof(float));
+    memset(g_step_logits_buffer, 0, NN_NUM_CLASSES * sizeof(float));
+    memset(g_new_hidden_state_buffer, 0, NN_GRU_HIDDEN_DIM * sizeof(float));
+    memset(g_att_scores_buffer, 0, NN_TIME_FRAMES * sizeof(float));
     
-    // Initialize Virtual Arena system
-    if (!VirtualArena_Init()) {
-        // DEBUG: Flash Swap init failed - 10 red blinks
-        for (int i = 0; i < 10; i++) {
-            AudioMoth_setRedLED(true);
-            AudioMoth_delay(150);
-            AudioMoth_setRedLED(false);
-            AudioMoth_delay(150);
-        }
-        g_nn_state = NN_STATE_ERROR;
-        return false;
-    }
-    
-    // DEBUG: Flash Swap initialized - alternating green/red
+    // DEBUG: External SRAM initialized - alternating green/red
     for (int i = 0; i < 3; i++) {
         AudioMoth_setGreenLED(true);
-        AudioMoth_delay(100);
+        for (volatile int j = 0; j < 200000; j++);  // Busy wait
         AudioMoth_setGreenLED(false);
         AudioMoth_setRedLED(true);
-        AudioMoth_delay(100);
+        for (volatile int j = 0; j < 200000; j++);  // Busy wait
         AudioMoth_setRedLED(false);
     }
     
-    // Flash Swap uses virtual arenas - no memset needed
-#else
-    // Initialize memory arenas (normal RAM mode)
-    memset(g_backbone_arena, 0, NN_BACKBONE_ARENA_SIZE);
-    memset(g_streaming_arena, 0, NN_STREAMING_ARENA_SIZE);
-#endif
+    // DEBUG: Arena diagnostics - print arena addresses for verification
+    TensorArenaStats_t arena_stats;
+    TensorArena_GetStats(&arena_stats);
     
-    // DEBUG: Signal arenas initialized
-    AudioMoth_setGreenLED(true);
-    AudioMoth_delay(50);
-    AudioMoth_setGreenLED(false);
+    // Signal arena type: Green = External SRAM, Red = Error
+    if (arena_stats.is_external_sram) {
+        // Success: 3 quick green flashes
+        for (int i = 0; i < 3; i++) {
+            AudioMoth_setGreenLED(true);
+            for (volatile int j = 0; j < 100000; j++);  // Busy wait
+            AudioMoth_setGreenLED(false);
+            for (volatile int j = 0; j < 100000; j++);  // Busy wait
+        }
+    } else {
+        // Warning: Arena not in external SRAM - 3 red flashes
+        for (int i = 0; i < 3; i++) {
+            AudioMoth_setRedLED(true);
+            for (volatile int j = 0; j < 100000; j++);  // Busy wait
+            AudioMoth_setRedLED(false);
+            for (volatile int j = 0; j < 100000; j++);  // Busy wait
+        }
+    }
     
     // Initialize models
     if (!initialize_models()) {
         // DEBUG: Signal model initialization failed
         for (int i = 0; i < 5; i++) {
             AudioMoth_setRedLED(true);
-            AudioMoth_delay(100);
+            // AudioMoth_delay - REMOVED to avoid timer hang(100);
             AudioMoth_setRedLED(false);
-            AudioMoth_delay(100);
+            // AudioMoth_delay - REMOVED to avoid timer hang(100);
         }
         g_nn_state = NN_STATE_ERROR;
         return false;
     }
     
-    // DEBUG: Signal models initialized OK
+    // DEBUG: Models initialized successfully - 1 long green blink
     AudioMoth_setGreenLED(true);
-    AudioMoth_delay(100);
+    // AudioMoth_delay - REMOVED to avoid timer hang(200);
     AudioMoth_setGreenLED(false);
     
     // Reset streaming state
@@ -221,26 +250,20 @@ bool NN_ProcessAudio(const int16_t* audio_data, uint32_t num_samples, NN_Decisio
     
     uint32_t start_time = get_timestamp_ms();
     
-    // Step 1: Convert audio to spectrogram
-    float spectrogram[NN_INPUT_HEIGHT * NN_INPUT_WIDTH];
-    if (!preprocess_audio_to_spectrogram(audio_data, num_samples, spectrogram)) {
+    // Step 1: Convert audio to spectrogram (using static buffer)
+    if (!preprocess_audio_to_spectrogram(audio_data, num_samples, g_spectrogram_buffer)) {
         return false;
     }
     
-    // Step 2: Run backbone CNN inference
-    float backbone_features[NN_BACKBONE_FEATURES * NN_TIME_FRAMES];
-    if (!run_backbone_inference(spectrogram, backbone_features)) {
+    // Step 2: Run backbone CNN inference (using static buffer)
+    if (!run_backbone_inference(g_spectrogram_buffer, g_backbone_features_buffer)) {
         return false;
     }
     
     // Step 3: Process full temporal sequence with streaming model
     // Backbone output shape: [time=NN_TIME_FRAMES, feat=NN_BACKBONE_FEATURES]
     // Run the streaming model for each timestep sequentially, carrying hidden state
-    // Attention-like aggregation over timesteps using hidden-state energies
-    float accumulated_logits[NN_NUM_CLASSES];
-    float step_logits[NN_NUM_CLASSES];
-    float new_hidden_state[NN_GRU_HIDDEN_DIM];
-    float att_scores[NN_TIME_FRAMES];
+    // Attention-like aggregation over timesteps using hidden-state energies (using static buffers)
     
     // Allocate history of per-timestep logits on heap to avoid stack bloat
     const int logits_hist_count = NN_TIME_FRAMES * NN_NUM_CLASSES;
@@ -250,61 +273,61 @@ bool NN_ProcessAudio(const int16_t* audio_data, uint32_t num_samples, NN_Decisio
     }
     
     for (int t = 0; t < NN_TIME_FRAMES; t++) {
-        const float* timestep_features = &backbone_features[t * NN_BACKBONE_FEATURES];
+        const float* timestep_features = &g_backbone_features_buffer[t * NN_BACKBONE_FEATURES];
         
-        if (!run_streaming_inference(timestep_features, step_logits, new_hidden_state)) {
+        if (!run_streaming_inference(timestep_features, g_step_logits_buffer, g_new_hidden_state_buffer)) {
             free(logits_history);
             return false;
         }
         
         // Save logits_t
-        memcpy(&logits_history[t * NN_NUM_CLASSES], step_logits, sizeof(float) * NN_NUM_CLASSES);
+        memcpy(&logits_history[t * NN_NUM_CLASSES], g_step_logits_buffer, sizeof(float) * NN_NUM_CLASSES);
         
         // Compute a simple attention score from hidden state energy
         float sum_abs = 0.0f;
         for (int h = 0; h < NN_GRU_HIDDEN_DIM; h++) {
-            float v = new_hidden_state[h];
+            float v = g_new_hidden_state_buffer[h];
             sum_abs += (v >= 0.0f ? v : -v);
         }
-        att_scores[t] = sum_abs / (float)NN_GRU_HIDDEN_DIM;
+        g_att_scores_buffer[t] = sum_abs / (float)NN_GRU_HIDDEN_DIM;
         
         // Carry hidden state forward to next timestep
-        memcpy(g_gru_hidden_state, new_hidden_state, sizeof(g_gru_hidden_state));
+        memcpy(g_gru_hidden_state, g_new_hidden_state_buffer, NN_GRU_HIDDEN_DIM * sizeof(float));
     }
     
     // Softmax over attention scores to obtain temporal weights
     // Find max for numerical stability
-    float max_score = att_scores[0];
+    float max_score = g_att_scores_buffer[0];
     for (int t = 1; t < NN_TIME_FRAMES; t++) {
-        if (att_scores[t] > max_score) max_score = att_scores[t];
+        if (g_att_scores_buffer[t] > max_score) max_score = g_att_scores_buffer[t];
     }
     float sum_exp = 0.0f;
     for (int t = 0; t < NN_TIME_FRAMES; t++) {
-        att_scores[t] = expf(att_scores[t] - max_score);
-        sum_exp += att_scores[t];
+        g_att_scores_buffer[t] = expf(g_att_scores_buffer[t] - max_score);
+        sum_exp += g_att_scores_buffer[t];
     }
     const float inv_sum = 1.0f / sum_exp;
     for (int t = 0; t < NN_TIME_FRAMES; t++) {
-        att_scores[t] *= inv_sum; // now att_scores are alphas
+        g_att_scores_buffer[t] *= inv_sum; // now att_scores are alphas
     }
     
     // Weighted sum of logits over time using attention weights
     for (int c = 0; c < NN_NUM_CLASSES; c++) {
-        accumulated_logits[c] = 0.0f;
+        g_accumulated_logits_buffer[c] = 0.0f;
     }
     for (int t = 0; t < NN_TIME_FRAMES; t++) {
-        const float alpha = att_scores[t];
+        const float alpha = g_att_scores_buffer[t];
         const float* logits_t = &logits_history[t * NN_NUM_CLASSES];
         for (int c = 0; c < NN_NUM_CLASSES; c++) {
-            accumulated_logits[c] += alpha * logits_t[c];
+            g_accumulated_logits_buffer[c] += alpha * logits_t[c];
         }
     }
     
     free(logits_history);
     
     // Step 5: Apply softmax and generate decision
-    apply_softmax(accumulated_logits, NN_NUM_CLASSES);
-    if (!finalize_decision(accumulated_logits, decision)) {
+    apply_softmax(g_accumulated_logits_buffer, NN_NUM_CLASSES);
+    if (!finalize_decision(g_accumulated_logits_buffer, decision)) {
         return false;
     }
     
@@ -350,11 +373,11 @@ void NN_runPerformanceTestSequence(const int16_t* audio_data, uint32_t num_sampl
     
     // === 1 BLINK ROSSO ACCESO/SPENTO ===
     AudioMoth_setRedLED(true);
-    AudioMoth_delay(500);
+    // AudioMoth_delay - REMOVED to avoid timer hang(500);
     AudioMoth_setRedLED(false);
     
     // === PAUSA 3 SECONDI ===
-    AudioMoth_delay(3000);
+    // AudioMoth_delay - REMOVED to avoid timer hang(3000);
     
     // === TEST 10 INFERENZE ===
     for (int i = 0; i < 10; i++) {
@@ -363,11 +386,11 @@ void NN_runPerformanceTestSequence(const int16_t* audio_data, uint32_t num_sampl
     
     // === 1 BLINK VERDE ACCESO/SPENTO ===
     AudioMoth_setGreenLED(true);
-    AudioMoth_delay(500);
+    // AudioMoth_delay - REMOVED to avoid timer hang(500);
     AudioMoth_setGreenLED(false);
     
     // === PAUSA 3 SECONDI ===
-    AudioMoth_delay(3000);
+    // AudioMoth_delay - REMOVED to avoid timer hang(3000);
     
     // === TEST 100 INFERENZE ===
     for (int i = 0; i < 100; i++) {
@@ -376,11 +399,11 @@ void NN_runPerformanceTestSequence(const int16_t* audio_data, uint32_t num_sampl
     
     // === 1 BLINK VERDE ACCESO/SPENTO ===
     AudioMoth_setGreenLED(true);
-    AudioMoth_delay(500);
+    // AudioMoth_delay - REMOVED to avoid timer hang(500);
     AudioMoth_setGreenLED(false);
     
     // === PAUSA 3 SECONDI ===
-    AudioMoth_delay(3000);
+    // AudioMoth_delay - REMOVED to avoid timer hang(3000);
     
     // === TEST 1000 INFERENZE ===
     for (int i = 0; i < 1000; i++) {
@@ -389,7 +412,7 @@ void NN_runPerformanceTestSequence(const int16_t* audio_data, uint32_t num_sampl
     
     // === 1 BLINK ROSSO ACCESO/SPENTO ===
     AudioMoth_setRedLED(true);
-    AudioMoth_delay(500);
+    // AudioMoth_delay - REMOVED to avoid timer hang(500);
     AudioMoth_setRedLED(false);
     
     // === BASTA! STOP TUTTO ===
@@ -402,23 +425,23 @@ void NN_runPerformanceTestSequence(const int16_t* audio_data, uint32_t num_sampl
 static bool initialize_models(void) {
     // DEBUG: Entering initialize_models
     AudioMoth_setGreenLED(true);
-    AudioMoth_delay(100);
+    // AudioMoth_delay - REMOVED to avoid timer hang(100);
     AudioMoth_setGreenLED(false);
-    AudioMoth_delay(100);
+    // AudioMoth_delay - REMOVED to avoid timer hang(100);
     
     // Create backbone model
     g_backbone_model = tflm_create_model(backbone_model_data, backbone_model_data_len);
     if (!g_backbone_model) {
         // DEBUG: Backbone model creation failed - 1 red blink
         AudioMoth_setRedLED(true);
-        AudioMoth_delay(300);
+        // AudioMoth_delay - REMOVED to avoid timer hang(300);
         AudioMoth_setRedLED(false);
         return false;
     }
     
     // DEBUG: Backbone model created - 1 green blink
     AudioMoth_setGreenLED(true);
-    AudioMoth_delay(100);
+    // AudioMoth_delay - REMOVED to avoid timer hang(100);
     AudioMoth_setGreenLED(false);
     
     // Create backbone interpreter
@@ -427,9 +450,9 @@ static bool initialize_models(void) {
         // DEBUG: Backbone interpreter creation failed - 2 red blinks
         for (int i = 0; i < 2; i++) {
             AudioMoth_setRedLED(true);
-            AudioMoth_delay(200);
+            // AudioMoth_delay - REMOVED to avoid timer hang(200);
             AudioMoth_setRedLED(false);
-            AudioMoth_delay(200);
+            // AudioMoth_delay - REMOVED to avoid timer hang(200);
         }
         return false;
     }
@@ -437,9 +460,9 @@ static bool initialize_models(void) {
     // DEBUG: Backbone interpreter created - 2 green blinks
     for (int i = 0; i < 2; i++) {
         AudioMoth_setGreenLED(true);
-        AudioMoth_delay(100);
+        // AudioMoth_delay - REMOVED to avoid timer hang(100);
         AudioMoth_setGreenLED(false);
-        AudioMoth_delay(100);
+        // AudioMoth_delay - REMOVED to avoid timer hang(100);
     }
     
     // Allocate backbone tensors
@@ -447,19 +470,25 @@ static bool initialize_models(void) {
         // DEBUG: Backbone tensor allocation failed - 3 red blinks
         for (int i = 0; i < 3; i++) {
             AudioMoth_setRedLED(true);
-            AudioMoth_delay(200);
+            // AudioMoth_delay - REMOVED to avoid timer hang(200);
             AudioMoth_setRedLED(false);
-            AudioMoth_delay(200);
+            // AudioMoth_delay - REMOVED to avoid timer hang(200);
         }
         return false;
     }
     
-    // DEBUG: Backbone tensors allocated - 3 green blinks
-    for (int i = 0; i < 3; i++) {
+    // DEBUG: Backbone tensors allocated - show arena usage via LED pattern
+    size_t backbone_used = tflm_get_arena_used_bytes(g_backbone_interpreter);
+    // Convert KB to LED blinks: 1KB = 1 blink, max 5 blinks
+    int kb_used = (int)(backbone_used / 1024);
+    int blinks = (kb_used > 5) ? 5 : kb_used;
+    if (blinks == 0) blinks = 1;  // At least 1 blink for success
+    
+    for (int i = 0; i < blinks; i++) {
         AudioMoth_setGreenLED(true);
-        AudioMoth_delay(100);
+        // AudioMoth_delay - REMOVED to avoid timer hang(100);
         AudioMoth_setGreenLED(false);
-        AudioMoth_delay(100);
+        // AudioMoth_delay - REMOVED to avoid timer hang(100);
     }
     
     // Create streaming model
@@ -483,7 +512,7 @@ static bool initialize_models(void) {
 }
 
 static void reset_gru_state(void) {
-    memset(g_gru_hidden_state, 0, sizeof(g_gru_hidden_state));
+    memset(g_gru_hidden_state, 0, NN_GRU_HIDDEN_DIM * sizeof(float));
 }
 
 // Simple PRNG for dummy data generation (declaration moved to top)

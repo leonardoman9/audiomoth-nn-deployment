@@ -1,6 +1,7 @@
 #include "tflm_wrapper.h"
+#include "../src/nn/tensor_arena.h"
+#include "../inc/nn/nn_model.h"  // For NN_GRU_HIDDEN_DIM, NN_NUM_CLASSES
 #include <string.h>
-#include "../inc/audiomoth.h"  // For LED debug functions
 
 // AudioMoth-compatible TFLM stub implementation
 // Optimized for our specific models: Backbone [1,18,40]->[1,18,32], Streaming [1,32]->[1,32]
@@ -19,8 +20,10 @@ typedef struct {
     unsigned char* arena;
     unsigned int arena_size;
     unsigned int arena_used;
-    float* input_buffer;
-    float* output_buffer;
+    float* input0_buffer;   // First input (features)
+    float* input1_buffer;   // Second input (hidden state for streaming)
+    float* output0_buffer;  // First output (backbone features or logits)
+    float* output1_buffer;  // Second output (new hidden state for streaming)
     int input_dims[4];
     int output_dims[4];
     bool allocated;
@@ -68,8 +71,10 @@ TFLMInterpreter tflm_create_interpreter(TFLMModel model, unsigned char* arena, u
     interpreter->arena = arena;
     interpreter->arena_size = arena_size;
     interpreter->arena_used = 0;
-    interpreter->input_buffer = NULL;
-    interpreter->output_buffer = NULL;
+    interpreter->input0_buffer = NULL;
+    interpreter->input1_buffer = NULL;
+    interpreter->output0_buffer = NULL;
+    interpreter->output1_buffer = NULL;
     interpreter->allocated = false;
     
     // Detect model type by arena size to set correct dimensions
@@ -129,34 +134,83 @@ TFLMStatus tflm_allocate_tensors(TFLMInterpreter interpreter) {
     }
     
     // Allocate from arena with proper alignment
-    interp->input_buffer = (float*)interp->arena;
-    interp->output_buffer = (float*)(interp->arena + input_size);
-    interp->arena_used = total_needed;
-    interp->allocated = true;
+    size_t offset = 0;
     
-    // Initialize buffers to zero
-    memset(interp->input_buffer, 0, input_size);
-    memset(interp->output_buffer, 0, output_size);
+    if (interp->is_backbone) {
+        // Backbone: 1 input, 1 output
+        interp->input0_buffer = (float*)(interp->arena + offset);
+        offset += input_size;
+        interp->output0_buffer = (float*)(interp->arena + offset);
+        offset += output_size;
+        interp->input1_buffer = NULL;   // Not used
+        interp->output1_buffer = NULL;  // Not used
+        
+        // Initialize buffers
+        memset(interp->input0_buffer, 0, input_size);
+        memset(interp->output0_buffer, 0, output_size);
+    } else {
+        // Streaming: 2 inputs, 2 outputs
+        size_t input1_size = NN_GRU_HIDDEN_DIM * sizeof(float);  // Hidden state
+        size_t output1_size = NN_GRU_HIDDEN_DIM * sizeof(float); // New hidden state
+        
+        interp->input0_buffer = (float*)(interp->arena + offset);  // Features
+        offset += input_size;
+        interp->input1_buffer = (float*)(interp->arena + offset);  // Hidden in
+        offset += input1_size;
+        interp->output0_buffer = (float*)(interp->arena + offset); // Logits
+        offset += output_size;
+        interp->output1_buffer = (float*)(interp->arena + offset); // Hidden out
+        offset += output1_size;
+        
+        // Initialize buffers
+        memset(interp->input0_buffer, 0, input_size);
+        memset(interp->input1_buffer, 0, input1_size);
+        memset(interp->output0_buffer, 0, output_size);
+        memset(interp->output1_buffer, 0, output1_size);
+    }
+    
+    interp->arena_used = offset + 256;  // Extra padding
+    interp->allocated = true;
     
     return TFLM_OK;
 }
 
 float* tflm_get_input_data(TFLMInterpreter interpreter, int input_index) {
-    if (!interpreter || input_index != 0) {
+    if (!interpreter) {
         return NULL;
     }
     
     InterpreterStub* interp = (InterpreterStub*)interpreter;
-    return interp->allocated ? interp->input_buffer : NULL;
+    if (!interp->allocated) {
+        return NULL;
+    }
+    
+    if (input_index == 0) {
+        return interp->input0_buffer;
+    } else if (input_index == 1) {
+        return interp->input1_buffer;  // May be NULL for backbone
+    }
+    
+    return NULL;
 }
 
 float* tflm_get_output_data(TFLMInterpreter interpreter, int output_index) {
-    if (!interpreter || output_index != 0) {
+    if (!interpreter) {
         return NULL;
     }
     
     InterpreterStub* interp = (InterpreterStub*)interpreter;
-    return interp->allocated ? interp->output_buffer : NULL;
+    if (!interp->allocated) {
+        return NULL;
+    }
+    
+    if (output_index == 0) {
+        return interp->output0_buffer;
+    } else if (output_index == 1) {
+        return interp->output1_buffer;  // May be NULL for backbone
+    }
+    
+    return NULL;
 }
 
 TFLMStatus tflm_invoke(TFLMInterpreter interpreter) {
@@ -178,19 +232,26 @@ TFLMStatus tflm_invoke(TFLMInterpreter interpreter) {
                 // Sample input features for this output
                 for (int i = 0; i < 40; i++) {
                     int input_idx = t * 40 + i;
-                    sum += interp->input_buffer[input_idx] * 0.1f;  // Simple weighting
+                    sum += interp->input0_buffer[input_idx] * 0.1f;  // Simple weighting
                 }
                 int output_idx = t * 32 + f;
-                interp->output_buffer[output_idx] = sum / 40.0f + (float)f * 0.01f;  // Add feature bias
+                interp->output0_buffer[output_idx] = sum / 40.0f + (float)f * 0.01f;  // Add feature bias
             }
         }
     } else {
-        // Streaming inference: [1, 32] -> [1, 32]
-        // Simulate RNN/GRU processing
-        for (int i = 0; i < 32; i++) {
-            // Simple transformation with some non-linearity simulation
-            float val = interp->input_buffer[i];
-            interp->output_buffer[i] = val * 0.8f + 0.1f * (float)i / 32.0f;  // Feature-dependent processing
+        // Streaming inference: 2 inputs [features + hidden] -> 2 outputs [logits + new_hidden]
+        // Simulate GRU processing with hidden state
+        
+        // Process features to logits
+        for (int i = 0; i < NN_NUM_CLASSES; i++) {
+            float feat_val = (i < 32) ? interp->input0_buffer[i] : 0.0f;  // Features input
+            interp->output0_buffer[i] = feat_val * 0.8f + 0.1f * (float)i / NN_NUM_CLASSES;  // Logits output
+        }
+        
+        // Update hidden state
+        for (int h = 0; h < NN_GRU_HIDDEN_DIM; h++) {
+            float hidden_val = interp->input1_buffer ? interp->input1_buffer[h] : 0.0f;  // Hidden input
+            interp->output1_buffer[h] = 0.9f * hidden_val + 0.01f;  // New hidden output (dummy update)
         }
     }
     
@@ -249,13 +310,13 @@ int tflm_get_output_dims(TFLMInterpreter interpreter, int output_index, int* dim
     return -1;
 }
 
-unsigned int tflm_get_arena_used_bytes(TFLMInterpreter interpreter) {
+size_t tflm_get_arena_used_bytes(TFLMInterpreter interpreter) {
     if (!interpreter) {
         return 0;
     }
     
     InterpreterStub* interp = (InterpreterStub*)interpreter;
-    return interp->arena_used;
+    return interp->allocated ? interp->arena_used : 0;
 }
 
 void tflm_destroy_interpreter(TFLMInterpreter interpreter) {

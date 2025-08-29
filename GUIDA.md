@@ -111,6 +111,41 @@ Con `.bss > 4KB`, il sistema AudioMoth ha:
 
 ---
 
+### **2.4 Cos'è .bss, e differenza tra Stack e Heap**
+
+- **.bss (Block Started by Symbol)**
+  - Sezione della RAM che contiene variabili **globali o statiche non inizializzate** (o inizializzate a zero) allocate automaticamente all'avvio.
+  - Esempi che finiscono in .bss:
+    ```c
+    static uint8_t buffer[1024];   // 1KB in .bss
+    int global_array[256];         // ~1KB in .bss
+    ```
+  - Pro: semplice, zero overhead a runtime; Contro: occupa RAM fissa fin dall'avvio e riduce lo spazio per stack/heap.
+
+- **Stack**
+  - Area di RAM usata per chiamate di funzione, salvataggio registri di ritorno e **variabili locali** a durata automatica.
+  - Cresce/decresce con le chiamate (LIFO). È molto veloce ma di dimensione limitata.
+  - Esempio (va nello stack):
+    ```c
+    void f(void) {
+        uint8_t local[256];  // 256B sullo stack
+    }
+    ```
+  - Rischi: array locali troppo grandi → **stack overflow** (sintomi: crash/trap).
+
+- **Heap**
+  - Area di RAM usata per **allocazioni dinamiche** via `malloc/new` e rilasciate con `free/delete`.
+  - Flessibile: si alloca solo quando serve; ma richiede gestione (frammentazione, check errori).
+  - Esempio (va nell'heap):
+    ```c
+    uint8_t* p = malloc(4096);  // 4KB nell'heap
+    // ...
+    free(p);
+    ```
+  - Vantaggio chiave nel nostro caso: spostare grandi buffer da .bss → **heap** riduce la pressione sulla .bss (critica <4KB) e lascia più respiro allo stack.
+
+In sintesi: mantenere **.bss < 4KB** è fondamentale su AudioMoth; per buffer grandi preferire **heap** o allocazioni su stack (se piccole e a vita breve). Evitare grandi array locali su stack nelle funzioni “calde” dell'inferenza.
+
 ## **3. CONCETTI FONDAMENTALI**
 
 ### **3.1 TensorFlow Lite Micro (TFLM)**
@@ -1412,6 +1447,181 @@ Il **Virtual Arena System** sviluppato non è solo una soluzione per AudioMoth, 
 
 ---
 
+## **11. Sintesi ragionata e chiarimenti finali**
+
+Questa sezione riassume in modo operativo il ragionamento fatto, con spiegazioni puntuali sui punti critici e sulle scelte progettuali.
+
+### 11.1 Vincoli hardware e conseguenze dirette
+
+- **Memoria disponibile**: AudioMoth ha **32KB di RAM** e **256KB di Flash**.
+- **Modelli nel firmware** (array C):
+  - `backbone_model_data[]` ≈ **54,592 B (~53.3KB)**
+  - `streaming_model_data[]` ≈ **21,552 B (~21.1KB)**
+  - Totale modelli ≈ **74.4KB** (risiedono in Flash, non in RAM).
+- **.bss critico**: empiricamente, **> 4KB** di `.bss` porta a instabilità (stack/heap collision). Abbiamo quindi spostato i grandi buffer su heap per restare **< 4KB**.
+
+### 11.2 Perché TFLM “non entra” in RAM senza ausili
+
+- TFLM (TensorFlow Lite Micro) richiede una **arena RAM contigua** per input, output, tensori intermedi e metadati.
+- Per il modello GRU‑64 con input [18×40], la richiesta tipica è **~40KB di arena**, maggiore dei **32KB** totali di RAM → impossibile con approccio tradizionale.
+
+### 11.3 Due strade possibili e la scelta
+
+1) Modificare TFLM per eliminare il vincolo di arena contigua (alto rischio, manutenzione complessa, fork non triviale).
+2) Fornire a TFLM un’astrazione di **memoria più grande** usando la **Flash come store** e una **RAM cache** per i tensori attivi.
+
+Scelta: opzione 2, implementata come **Flash‑resident tensor store con RAM cache** (non è “swapping” in senso OS perché non c’è MMU).
+
+### 11.4 “NO scritture in Flash a runtime” – cosa significa e perché
+
+- Significa che in esecuzione non eseguiamo **erase/program** sulla Flash (niente `MSC_ErasePage`/`MSC_WriteWord`).
+- Perché:
+  - **Affidabilità**: la Flash ha cicli di scrittura limitati → usura.
+  - **Latenza**: scritture sono lente (ms) e bloccanti → jitter e drop di real‑time.
+  - **Sicurezza**: erase a pagina (2KB), non byte‑level → rischio corruzione se interrotte.
+  - **Energia**: scritture consumano molto più di letture/RAM.
+- Quindi la Flash è usata solo in **lettura** per **modelli/pesi** e come **backing store** dei tensori non attivi; i **tensori attivi** vivono in RAM e, se evictati, vengono semplicemente **scartati** (si rigenerano alla prossima richiesta).
+
+### 11.5 Come “presentiamo” più memoria a TFLM
+
+- Il **Virtual Arena Manager** fornisce a TFLM l’illusione di un’arena ampia.
+- In realtà, i dati risiedono:
+  - in **RAM cache (8KB)** per i tensori attivi (LRU);
+  - in **Flash (64KB)** per i tensori inattivi.
+- Alla richiesta, avviene un **copy‑on‑access** da Flash→RAM; se la cache è piena, l’LRU **evicta** il meno recente. Nessun write‑back in Flash.
+
+### 11.6 Linker script e mappatura della memoria
+
+Abbiamo diviso la Flash in codice e “arena virtuale” dedicata, e definito i simboli per indirizzare l’area:
+
+```ld
+MEMORY {
+    FLASH_CODE (rx) : ORIGIN = 0x4000,  LENGTH = 0x2C000  /* 176KB firmware */
+    FLASH_ARENA (r) : ORIGIN = 0x30000, LENGTH = 0x10000  /* 64KB virtual */
+    RAM (rwx)       : ORIGIN = 0x20000000, LENGTH = 0x8000 /* 32KB RAM */
+}
+
+SECTIONS {
+    .tensor_arena (NOLOAD): ALIGN(4) {
+        . = ALIGN(4);
+        __tensor_arena_start__ = .;
+        . = . + 0x10000;  /* 64KB riservati */
+        __tensor_arena_end__ = .;
+    } > FLASH_ARENA
+}
+```
+
+I simboli `__tensor_arena_start__/end__` sono usati dal manager per calcolare l’indirizzo Flash di ciascun tensore.
+
+### 11.7 “Flash come external SRAM” (metafora corretta)
+
+- A livello concettuale: **MCU → Flash controller → 256KB Flash**, con **64KB** riservati come **virtual arena**.
+- Non è vera SRAM: le **scritture** non si fanno; gli **accessi** avvengono via **copia** in RAM cache; è un **data store** con caching, non una memoria eseguibile/leggibile‑scrivibile a bassa latenza.
+
+### 11.8 Misure performance: cosa considerare
+
+- Timer a **millisecondi** → usare **N grande (≥10k)** per media stabile.
+- Metriche corrette:
+  - `avg_time_us = (total_time_ms * 1000) / N`
+  - `time_100_inferences_ms = (total_time_ms * 100) / N`
+- I risultati osservati (~**786 μs** per inferenza con N=10k) sono coerenti con il costo dominante del backbone e il basso overhead dello streaming, anche dopo l’aggregazione “attention‑lite”.
+
+### 11.9 Stato attuale vs modello Python
+
+- **Equivalenza funzionale**: per i test di **performance** è sufficiente. L’“attention” usata è **lightweight** (senza pesi addestrati) e vive fuori dal grafo TFLite.
+- Per identità 1:1 col modello PyTorch/TFLite (con self‑attention addestrata) servirebbe esportare l’attenzione nel **.tflite** o replicarla con i **pesi** in C.
+
+### 11.10 Takeaway
+
+- Con **32KB RAM** e **256KB Flash** si possono eseguire modelli non triviali usando **Flash come store** e **RAM come cache**.
+- La policy **NO Flash writes a runtime** garantisce **affidabilità, latenza prevedibile** ed **efficienza energetica**.
+- Il **linker engineering** e il **Virtual Arena Manager** rendono trasparente a TFLM il vincolo fisico della RAM, senza modificare la libreria.
+
+### 11.11 Appendice rapida: .bss, Stack, Heap (in pratica)
+
+- **.bss**: variabili globali/statiche non inizializzate (o a zero) allocate all’avvio. Occupano RAM fissa e riducono lo spazio per stack/heap. Su AudioMoth mantenerla **< 4KB** è critico.
+- **Stack**: variabili locali e contesto delle funzioni (LIFO). Veloce ma limitato; array locali grandi possono causare overflow/crash.
+- **Heap**: memoria dinamica (`malloc/free`). Flessibile; consente di spostare grossi buffer fuori dalla .bss, alleggerendo i vincoli e preservando lo stack.
+
+### 11.12 Terminologia dell'approccio (cosa dire e cosa evitare)
+
+- **Come si chiama l'approccio?**
+  - Evitare “swap” in senso OS (manca MMU/paging).
+  - Corretto: **Flash‑resident tensor store con RAM cache** (copy‑on‑access con LRU), oppure
+    “application‑level virtual arena for TFLM (no MMU)”.
+
+- **Come funziona (one‑liner):**
+  - Pesi/modello in **Flash** (read‑only); tensori attivi in **RAM** (cache 8KB);
+    su accesso si copia Flash→RAM; LRU libera spazio. **Nessuna scrittura** in Flash a runtime.
+
+- **Che tipo di memoria è la Flash?**
+  - **Flash NOR interna** del microcontrollore: non volatile, mappata in indirizzi, lettura veloce;
+    riscrittura possibile solo con erase/program (lenta, usura, non byte‑addressable per write).
+  - Non è **RAM** (non R/W a bassa latenza), non è una **SD** (niente filesystem; qui è memoria mappata ad indirizzi).
+
+---
+
+## **12. Mappa del firmware e sezioni principali**
+
+Questa sezione descrive le parti principali del firmware che viene flashato e il ruolo di ciascun file/riquadro logico.
+
+### 12.1 Boot / Platform (inizializzazione hardware)
+
+- `src/audiomoth.c`: inizializzazione MCU (clock, GPIO, RTC/BURTC, watchdog), utility LED, delay e timebase.
+- `emlib/** (em_*.c)`: driver Silicon Labs (RTC, MSC – controller Flash, GPIO, timers, ecc.).
+
+### 12.2 Entrypoint applicativo
+
+- `src/main.c`:
+  - Chiama `AudioMoth_initialise()`.
+  - `NN_Init()` per inizializzare rete, Virtual Arena e interpreti TFLM.
+  - `performanceBenchmark()`: genera input finto, esegue N=10000 inferenze, calcola `total_time_ms`, `avg_time_us`, `time_100_inferences_ms`, setta `benchmark_completed` per lettura via GDB.
+
+### 12.3 Core NN (logica di inferenza)
+
+- `src/nn/nn_model.c`:
+  - `NN_Init()`: allocazioni su heap (mini‑arene interne, stato GRU), creazione interpreti per backbone/streaming, init Virtual Arena.
+  - `NN_ProcessAudio()`: preprocessing finto → backbone (features [18×32]) → streaming GRU su 18 timestep con propagazione hidden → aggregazione "attention‑lite" sul tempo → softmax → decisione.
+  - `NN_ResetStreamState()`: azzera hidden GRU.
+
+### 12.4 Modelli (grafi+pesi TFLite in Flash)
+
+- `src/nn/backbone_model_data.c`: `const unsigned char backbone_model_data[]` (~53.3KB).
+- `src/nn/streaming_model_data.c`: `const unsigned char streaming_model_data[]` (~21.1KB).
+- Passati agli interpreti TFLM; risiedono in Flash.
+
+### 12.5 Virtual Arena (memoria virtuale)
+
+- `src/nn/virtual_arena.h/.c`:
+  - **64KB** in Flash (region `FLASH_ARENA`) + **8KB** RAM cache.
+  - Tabella tensori: id, size, flash_offset, ram_addr, is_const, pinned, last_access.
+  - LRU eviction; **copy‑on‑access** Flash→RAM; **nessuna scrittura** in Flash a runtime.
+  - API: `VirtualArena_Init`, `VirtualArena_AllocTensor`, `VirtualArena_GetTensor`, `VirtualArena_Pin/Unpin`.
+
+### 12.6 TFLM wrapper (adattatore a Virtual Arena)
+
+- `third_party/tflm_wrapper_virtual.c`:
+  - `tflm_create_model/interpreter`, `tflm_allocate_tensors`, `tflm_get_input_data`, `tflm_get_output_data`, `tflm_invoke`.
+  - Usa `VirtualArena_AllocTensor/GetTensor` al posto di buffer RAM contigui, pin di input/output.
+
+### 12.7 Configurazione e build
+
+- `inc/nn/nn_config.h`: dimensioni/iperparametri (es. `NN_GRU_HIDDEN_DIM`, `NN_TIME_FRAMES`, numero classi).
+- `build/Makefile`: selezione sorgenti, linker, toolchain; output `audiomoth.axf/.hex/.bin`.
+
+### 12.8 Linker script e sezioni binario
+
+- Linker Virtual Arena: `build/audiomoth_flash_swap.ld`.
+  - `MEMORY`: `FLASH_CODE`, `FLASH_ARENA (64KB)`, `RAM`.
+  - Sezione `.tensor_arena (NOLOAD)` con simboli `__tensor_arena_start__/end__`.
+- Linker base: `build/audiomoth.ld` (senza `FLASH_ARENA`).
+- Sezioni tipiche nel binario:
+  - `.text` (codice + rodata), `.data` (inizializzate), `.bss` (non inizializzate; mantenuta **< 4KB**), `.heap`, `.stack_dummy`, `.tensor_arena` (NOLOAD, 64KB in Flash riservata per Virtual Arena).
+
+
+
+
+
 ## **APPENDICE A: Riferimenti Tecnici**
 
 ### **A.1 Datasheet e Documentazione**
@@ -1429,70 +1639,6 @@ Il **Virtual Arena System** sviluppato non è solo una soluzione per AudioMoth, 
 - [GNU ARM Embedded Toolchain](https://developer.arm.com/tools-and-software/open-source-software/developer-tools/gnu-toolchain/gnu-rm)
 - [SEGGER J-Link Software](https://www.segger.com/downloads/jlink/)
 - [AudioMoth Configuration App](https://www.openacousticdevices.info/applications)
-
-### **A.4 Benchmark e Misure Reali**
-
-⚠️ **IMPORTANTE**: I tempi nella guida sono **stime**. Usa sempre misure reali con DWT Cycle Counter:
-
-```c
-// Misura real-time con DWT Cycle Counter
-void benchmark_tensor_access(uint32_t tensor_id) {
-    // Enable DWT cycle counter
-    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
-    
-    uint32_t start = DWT->CYCCNT;
-    void* tensor = VirtualArena_GetTensor(tensor_id);
-    uint32_t end = DWT->CYCCNT;
-    
-    uint32_t cycles = end - start;
-    float us_48mhz = (float)cycles / 48.0f; // @ 48MHz
-    
-    printf("Tensor %d access: %d cycles (%.1f μs)\n", 
-           tensor_id, cycles, us_48mhz);
-}
-
-// Benchmark completo di inferenza
-void benchmark_inference(void) {
-    uint32_t start = DWT->CYCCNT;
-    TFLMStatus result = tflm_invoke(interpreter);
-    uint32_t end = DWT->CYCCNT;
-    
-    uint32_t cycles = end - start;
-    float ms_48mhz = (float)cycles / 48000.0f;
-    
-    printf("Inference: %d cycles (%.2f ms)\n", cycles, ms_48mhz);
-}
-```
-
-### **A.5 Verifiche Automatiche**
-
-```bash
-#!/bin/bash
-# Script per verificare .bss sotto limite critico
-
-BSS_SIZE=$(arm-none-eabi-size audiomoth.axf | awk 'NR==2 {print $3}')
-BSS_LIMIT=4096
-
-if [ $BSS_SIZE -gt $BSS_LIMIT ]; then
-    echo "❌ .bss=$BSS_SIZE > ${BSS_LIMIT}B limit! Sistema instabile"
-    echo "Riduci allocazioni statiche o usa malloc()"
-    exit 1
-else
-    echo "✅ .bss=$BSS_SIZE < ${BSS_LIMIT}B OK"
-fi
-
-# Verifica simboli Virtual Arena
-ARENA_START=$(arm-none-eabi-nm audiomoth.axf | grep __tensor_arena_start__ | cut -d' ' -f1)
-ARENA_END=$(arm-none-eabi-nm audiomoth.axf | grep __tensor_arena_end__ | cut -d' ' -f1)
-
-if [ "$ARENA_START" = "$ARENA_END" ]; then
-    echo "❌ Virtual Arena size = 0! Verifica linker script"
-    exit 1
-else
-    ARENA_SIZE=$((0x$ARENA_END - 0x$ARENA_START))
-    echo "✅ Virtual Arena: ${ARENA_SIZE}B (0x$ARENA_START-0x$ARENA_END)"
-fi
-```
 
 ### **A.6 Policy di Sicurezza**
 
@@ -1536,3 +1682,5 @@ fi
 ---
 
 *Questa guida è stata scritta per documentare completamente il processo di deployment di neural networks su AudioMoth utilizzando tecniche innovative di virtual memory management.*
+
+---

@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>  // For size_t
 
 #ifdef __cplusplus
 extern "C" {
@@ -61,7 +62,7 @@ int tflm_get_output_dims(TFLMInterpreter interpreter, int output_index, int* dim
 /**
  * Get arena usage
  */
-unsigned int tflm_get_arena_used_bytes(TFLMInterpreter interpreter);
+size_t tflm_get_arena_used_bytes(TFLMInterpreter interpreter);
 
 /**
  * Cleanup functions

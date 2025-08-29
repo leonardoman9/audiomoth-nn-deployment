@@ -6,9 +6,10 @@
 
 MEMORY
 {
-	/* Split Flash into code and virtual SRAM regions */
-	FLASH_CODE (rx) : ORIGIN = 0x4000, LENGTH = 0x2C000 /* 176KB for firmware */
-	FLASH_ARENA (r) : ORIGIN = 0x30000, LENGTH = 0x10000 /* 64KB as "External SRAM" for tensors */
+	/* Use entire Flash for code (full 1MB) */
+	FLASH_CODE (rx) : ORIGIN = 0x4000, LENGTH = 0xFC000 /* 1008KB for firmware */
+	/* Use real external SRAM for tensor arena */
+	EXT_SRAM (rwx) : ORIGIN = 0x80000000, LENGTH = 0x40000 /* 256KB external SRAM */
 	RAM (rwx) : ORIGIN = 0x20000000, LENGTH = 0x8000 /* 32KB internal RAM */
 }
 
@@ -62,14 +63,14 @@ SECTIONS
   __exidx_end = .;
   __etext = .;
 
-  /* Virtual tensor arena in Flash (like Gemini's External SRAM) */
-  .tensor_arena (NOLOAD): ALIGN(4)
+  /* Tensor arena in real external SRAM */
+  .tensor_arena (NOLOAD): ALIGN(32)
   {
-    . = ALIGN(4);
+    . = ALIGN(32);
     __tensor_arena_start__ = .;
-    . = . + 0x10000; /* Reserve 64KB for virtual arena */
+    . = . + 0x10000; /* Reserve 64KB for tensor arena */
     __tensor_arena_end__ = .;
-  } > FLASH_ARENA
+  } > EXT_SRAM
 
   .data : AT (__etext)
   {

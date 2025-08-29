@@ -11,10 +11,8 @@
 #include <string.h>
 #include <stdlib.h>
 
-// Place virtual arena in Flash section (like Gemini's External SRAM)
-// This is the "External SRAM" equivalent using Flash memory
-__attribute__((section(".tensor_arena")))
-static uint8_t virtual_tensor_arena[VIRTUAL_ARENA_SIZE];
+// Flash base address from linker (points to .tensor_arena section)
+// The .tensor_arena section is defined in the linker script and reserved in Flash
 
 // Small RAM buffer for active tensors (actual working memory)
 // Allocate dynamically to avoid .bss bloat
@@ -28,7 +26,6 @@ static uint32_t access_counter = 0;
 // Current RAM usage
 static uint32_t ram_used = 0;
 
-// Flash base address from linker
 extern uint32_t __tensor_arena_start__;
 extern uint32_t __tensor_arena_end__;
 

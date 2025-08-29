@@ -24,8 +24,8 @@ volatile uint32_t time_100_inferences_ms = 0; // Tempo per 100 inferenze (ms)
 volatile uint32_t benchmark_completed = 0;
 
 #define ENABLE_CYCLE_COUNTER() // Disabled for safety
-#define START_TIMING() (AudioMoth_getTime(&timing_start_sec, &timing_start_ms), 0)
-#define END_TIMING(start) get_elapsed_ms()
+#define START_TIMING() do { AudioMoth_getTime(&timing_start_sec, &timing_start_ms); } while(0)
+#define END_TIMING() get_elapsed_ms()
 #define CYCLES_TO_US(ms) (ms * 1000)  // ms to us
 #define CYCLES_TO_MS(ms) (ms)         // already in ms
 
@@ -404,7 +404,7 @@ int main(void) {
         for (int i = 0; i < 2; i++) {
             AudioMoth_setRedLED(true);
             AudioMoth_delay(150);
-            AudioMoth_setRedLED(false);
+    AudioMoth_setRedLED(false);
             AudioMoth_delay(150);
         }
         
@@ -1048,7 +1048,7 @@ static void performanceBenchmark(void) {
     static NN_Decision_t decision;
     
     // Variabili per timing preciso
-    uint32_t start_cycles, end_cycles;
+    uint32_t end_cycles;
     
     // Helper function to generate random audio data efficiently
     auto void fill_random_audio(void) {
@@ -1062,11 +1062,11 @@ static void performanceBenchmark(void) {
     // === PATTERN DI INIZIO: 3 LONG blinks ===
     for (int j = 0; j < 3; j++) {
         AudioMoth_setGreenLED(true);
-        AudioMoth_delay(300);
+        for (volatile int k = 0; k < 600000; k++);  // Busy wait
         AudioMoth_setGreenLED(false);
-        AudioMoth_delay(300);
+        for (volatile int k = 0; k < 600000; k++);  // Busy wait
     }
-    AudioMoth_delay(1000);   // Clear pause before test
+    for (volatile int k = 0; k < 2000000; k++);  // Clear pause before test
     
     // Generate fresh audio data
     fill_random_audio();
@@ -1074,28 +1074,26 @@ static void performanceBenchmark(void) {
     // === TIMING TEST: N INFERENZE ===
     AudioMoth_setRedLED(true);  // Indica inizio test
     
-    start_cycles = START_TIMING();
+    START_TIMING();
     
-    const int N = 10000;  // Usa N grande per risoluzione a ms stabile
+    const int N = 1000;  // Numero di inferenze per il benchmark
     for (int i = 0; i < N; i++) {
+        // LED debug per ogni iterazione (rallenta, rimuovere per timing puro)
+        /*
+        AudioMoth_setGreenLED(true);
+        for (volatile int k = 0; k < 200000; k++);  // Busy wait
+        AudioMoth_setGreenLED(false);
+        for (volatile int k = 0; k < 200000; k++);  // Busy wait
+        */
+        
         NN_ProcessAudio(audio_samples, 1024, &decision);
+        AudioMoth_feedWatchdog();  // Feed watchdog ogni iterazione
         
-        // Reset stream state periodico per sicurezza
-        if ((i + 1) % 500 == 0) {
-            NN_ResetStreamState();  // Clear GRU hidden state
-            AudioMoth_feedWatchdog();  // Feed watchdog durante il loop
-        }
-        
-        // Visual feedback ogni 1K inferenze
-        if ((i + 1) % 1000 == 0) {
-            AudioMoth_setGreenLED(true);
-            AudioMoth_delay(2);  // Brief flash
-            AudioMoth_setGreenLED(false);
-            AudioMoth_feedWatchdog();  // Feed watchdog durante il feedback
-        }
+        // Pausa tra inferenze per debug (rallenta, rimuovere per timing puro)
+        // for (volatile int k = 0; k < 400000; k++);  // Busy wait
     }
     
-    end_cycles = END_TIMING(start_cycles);
+    end_cycles = END_TIMING();
     AudioMoth_setRedLED(false);  // Fine test
     
     // Calcoli risultati
@@ -1113,9 +1111,9 @@ static void performanceBenchmark(void) {
     // === FINALE: Pattern di successo ===
     for (int i = 0; i < 10; i++) {
         AudioMoth_setGreenLED(true);
-        AudioMoth_delay(50);
+        for (volatile int j = 0; j < 100000; j++);  // Busy wait
         AudioMoth_setGreenLED(false);
-        AudioMoth_delay(50);
+        for (volatile int j = 0; j < 100000; j++);  // Busy wait
     }
 }
 

@@ -34,7 +34,8 @@ EXCLUDED_FILES = ../emlib/src/em_crypto.c \
                  ../fatfs/src/ffunicode.c \
                  ../fatfs/src/diskio.c \
                  ../src/nn/nn_flash_swap.c \
-                 ../third_party/tflm_wrapper.c
+                 ../src/nn/virtual_arena.c \
+                 ../third_party/tflm_wrapper_virtual.c
 
 # Set the name of the output files
 

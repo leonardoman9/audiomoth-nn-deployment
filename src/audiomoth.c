@@ -1068,52 +1068,37 @@ static void setupADC(uint32_t clockDivider, uint32_t acquisitionCycles, uint32_t
 /* Function to implement a sleeping delay */
 
 void AudioMoth_delay(uint32_t milliseconds) {
-
-    /* Ensure the delay period wont cause the counter to overflow and calculate clock ticks to wait */
-
-    if (milliseconds == 0)  return;
-
-    if (milliseconds > MILLISECONDS_IN_SECOND) milliseconds = MILLISECONDS_IN_SECOND;
-
-    /* Enable clock for TIMER1 */
-
-    CMU_ClockEnable(cmuClock_TIMER1, true);
-
-    /* Initialise TIMER1 */
-
-    TIMER_Init_TypeDef delayInit = TIMER_INIT_DEFAULT;
-
-    delayInit.prescale = timerPrescale1024;
-
-    delayInit.enable = false;
-
-    TIMER_Init(TIMER1, &delayInit);
-
-    /* Set up interrupt and set top */
-
-    TIMER_IntEnable(TIMER1, TIMER_IF_OF);
-
-    NVIC_ClearPendingIRQ(TIMER1_IRQn);
-
-    NVIC_EnableIRQ(TIMER1_IRQn);
-
-    /* Start timer and wait until interrupt occurs */
-
-    delayTimmerRunning = true;
-
-    uint32_t clockTicksToWait = ROUNDED_DIV((CMU_ClockFreqGet(cmuClock_HF) >> timerPrescale1024) * milliseconds, MILLISECONDS_IN_SECOND);
-
-    TIMER_TopSet(TIMER1, clockTicksToWait);
-
-    TIMER_CounterSet(TIMER1, 0);
-
-    TIMER_Enable(TIMER1, true);
-
-    while (delayTimmerRunning) {
-
-        EMU_EnterEM1();
-
+    /* TEMPORARY FIX: Disabled to prevent timer hang */
+    /* Use busy wait instead of timer-based delay */
+    
+    if (milliseconds == 0) return;
+    
+    // Simple busy wait: ~1000 cycles per ms (rough estimate)
+    volatile uint32_t cycles = milliseconds * 1000;
+    while (cycles--) {
+        __asm__("nop");
     }
+    return;  // Exit early, skip timer setup
+    
+    /* ORIGINAL CODE DISABLED TO PREVENT HANG:
+    if (milliseconds > MILLISECONDS_IN_SECOND) milliseconds = MILLISECONDS_IN_SECOND;
+    CMU_ClockEnable(cmuClock_TIMER1, true);
+    TIMER_Init_TypeDef delayInit = TIMER_INIT_DEFAULT;
+    delayInit.prescale = timerPrescale1024;
+    delayInit.enable = false;
+    TIMER_Init(TIMER1, &delayInit);
+    TIMER_IntEnable(TIMER1, TIMER_IF_OF);
+    NVIC_ClearPendingIRQ(TIMER1_IRQn);
+    NVIC_EnableIRQ(TIMER1_IRQn);
+    delayTimmerRunning = true;
+    uint32_t clockTicksToWait = ROUNDED_DIV((CMU_ClockFreqGet(cmuClock_HF) >> timerPrescale1024) * milliseconds, MILLISECONDS_IN_SECOND);
+    TIMER_TopSet(TIMER1, clockTicksToWait);
+    TIMER_CounterSet(TIMER1, 0);
+    TIMER_Enable(TIMER1, true);
+    while (delayTimmerRunning) {
+        EMU_EnterEM1();
+    }
+    END OF DISABLED CODE */
 
     /* Disable interrupt and reset TIMER1 */
 
