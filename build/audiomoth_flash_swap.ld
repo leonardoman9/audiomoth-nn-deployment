@@ -69,8 +69,8 @@ SECTIONS
     . = ALIGN(32);
     __tensor_arena_start__ = .;
     
-    /* Force the section to fill the entire external SRAM */
-    . = . + LENGTH(EXT_SRAM);
+    /* Use only the amount defined in tensor_arena.h (64KB for Direct Inference) */
+    . = . + (64 * 1024);
     
     __tensor_arena_end__ = .;
     
