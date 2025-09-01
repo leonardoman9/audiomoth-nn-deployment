@@ -68,8 +68,12 @@ SECTIONS
   {
     . = ALIGN(32);
     __tensor_arena_start__ = .;
-    . = . + 0x10000; /* Reserve 64KB for tensor arena */
+    
+    /* Force the section to fill the entire external SRAM */
+    . = . + LENGTH(EXT_SRAM);
+    
     __tensor_arena_end__ = .;
+    
   } > EXT_SRAM
 
   .data : AT (__etext)
