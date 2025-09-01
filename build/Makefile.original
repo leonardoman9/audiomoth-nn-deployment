@@ -1,21 +1,25 @@
 #****************************************************************************
-# Makefile with Smart TFLM Wrapper
-# Uses real neural network math instead of dummy calculations
+# Makefile
+# openacousticdevices.info
+# November 2020
 #****************************************************************************
 
 # Set the toolpath parameter to the location of the GNU Arm Embedded Toolchain
+
 TOOLCHAIN_PATH = /Users/leonardomannini/Documents/Toolchains/
+
 TOOLCHAIN_VERSION = gcc-arm-none-eabi-10.3-2021.10
 
 # Determine the path to the toolchain binary
+
 TOOLPATH = $(TOOLCHAIN_PATH)/$(TOOLCHAIN_VERSION)/bin/
 
-# Standard AudioMoth includes
-INC = ../cmsis ../device/inc ../emlib/inc ../emusb/inc ../drivers/inc ../fatfs/inc  ../gps/inc ../inc ../inc/nn ../third_party ../third_party/tflite-micro
+# These are the locations of the source and header files
 
+INC = ../cmsis ../device/inc ../emlib/inc ../emusb/inc ../drivers/inc ../fatfs/inc  ../gps/inc ../inc ../inc/nn ../third_party
 SRC = ../device/src ../emlib/src ../emusb/src ../drivers/src ../fatfs/src ../src ../src/nn ../third_party
-
-# Exclude files for NN-only mode + old dummy wrapper
+# Exclude modules for NN-only mode (no audio recording needed)
+# Safe to remove for inference-only testing:
 EXCLUDED_FILES = ../emlib/src/em_crypto.c \
                  ../emlib/src/em_aes.c \
                  ../emlib/src/em_can.c \
@@ -31,24 +35,22 @@ EXCLUDED_FILES = ../emlib/src/em_crypto.c \
                  ../fatfs/src/diskio.c \
                  ../src/nn/nn_flash_swap.c \
                  ../src/nn/virtual_arena.c \
-                 ../third_party/tflm_wrapper_virtual.c \
-                 ../third_party/tflm_wrapper.c
-
-# Add smart wrapper sources
-SMART_WRAPPER_SRCS = ../third_party/tflite_parser.c \
-                     ../third_party/tflm_real_math.c \
-                     ../third_party/tflm_smart_wrapper.c
+                 ../third_party/tflm_wrapper_virtual.c
 
 # Set the name of the output files
-FILENAME = audiomoth_smart
+
+FILENAME = audiomoth
 
 # This is the location of the resulting object files
+
 OBJPATH = ./objects/
 
 # Set the target EFM32WG to that used in AudioMoth
+
 TARGET = EFM32WG380F256
 
 # The following code generates the list of objects and the search path of source and header files
+
 VPATH = $(SRC)
 
 IFLAGS = $(foreach d, $(INC), -I$d)
@@ -58,16 +60,14 @@ _CSRC_ALL = $(notdir $(foreach d, $(SRC), $(wildcard $d/*.c)))
 _CSRC = $(filter-out $(notdir $(EXCLUDED_FILES)), $(_CSRC_ALL))
 _SSRC = $(notdir $(foreach d, $(SRC), $(wildcard $d/*.s)))
 
-# Add smart wrapper C sources
-_SMART_CSRC = $(notdir $(SMART_WRAPPER_SRCS))
-
-_OBJ = $(_CSRC:.c=.o) $(_SSRC:.s=.o) $(_SMART_CSRC:.c=.o)
+_OBJ = $(_CSRC:.c=.o) $(_SSRC:.s=.o)
 
 OBJ = $(sort $(foreach d, $(_OBJ), $(OBJPATH)$d))
 
 DEP = $(OBJ:.o=.d)
 
 # These are the compilation settings
+
 CC = $(TOOLPATH)arm-none-eabi-gcc
 
 CSIZE = $(TOOLPATH)arm-none-eabi-size
@@ -76,27 +76,21 @@ COBJCOPY = $(TOOLPATH)arm-none-eabi-objcopy
 
 COBJDUMP = $(TOOLPATH)arm-none-eabi-objdump
 
-# Compiler flags with ARM optimizations
-CFLAGS = -mcpu=cortex-m4 -mfloat-abi=hard -mfpu=fpv4-sp-d16 -mthumb -Wall '-DARM_MATH_CM4=1' '-D$(TARGET)=1' -g -std=c99
+CFLAGS = -mcpu=cortex-m4 -mfloat-abi=hard -mfpu=fpv4-sp-d16 -mthumb -Wall '-DARM_MATH_CM4=1' '-D$(TARGET)=1' -g
 
 DFLAGS = -MMD
 
-# Build rules
+# Finally the build rules
 
-# C files
 $(OBJPATH)%.o: %.c
 	@mkdir -p $(OBJPATH)
-	@echo 'Building C file' $@
-	@$(CC) $(CFLAGS) $(DFLAGS) -O3 -ffunction-sections -fdata-sections -c -o "$@" "$<" $(IFLAGS)
+	@echo 'Building' $@
+	@$(CC) $(CFLAGS) $(DFLAGS) -O3 -ffunction-sections -fdata-sections -std=c99 -c -o "$@" "$<" $(IFLAGS)
 
-# Assembly files
 $(OBJPATH)%.o: %.s
 	@mkdir -p $(OBJPATH)
-	@echo 'Building ASM file' $@
+	@echo 'Building' $@
 	@$(CC) $(CFLAGS) $(DFLAGS) -x assembler-with-cpp -c -o "$@" "$<" $(IFLAGS)
-
-# Smart wrapper sources (may be in different directories)
-vpath %.c ../third_party
 
 $(FILENAME).bin: $(OBJ)
 	@echo 'Building' $(FILENAME).axf
@@ -120,9 +114,3 @@ clean:
 	rm -f $(FILENAME).bin
 	rm -f $(FILENAME).hex
 	rm -f $(FILENAME).map
-
-.PHONY: info
-info:
-	@echo "Smart wrapper sources: $(words $(SMART_WRAPPER_SRCS)) files"
-	@echo "Total objects: $(words $(OBJ)) files"
-	@echo "Excluded dummy wrapper files"
