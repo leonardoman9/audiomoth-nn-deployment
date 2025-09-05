@@ -25,8 +25,8 @@ command 1
     echo \n
 end
 
-# Break in initialize_models to see progress
-break initialize_models
+# Break in initialize_interpreters to see bridge creation
+break initialize_interpreters
 command 2
     echo \n
     echo "📍 initialize_models started\n"
@@ -35,7 +35,6 @@ command 2
     echo \n
 end
 
-# Break in the main performance benchmark to see if it ever gets there
 break performanceBenchmark
 command 3
     echo \n

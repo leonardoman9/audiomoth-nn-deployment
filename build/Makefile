@@ -49,25 +49,30 @@ SMART_WRAPPER_SRCS =
 # Bypassa TFLM completamente, usa arrays C pre-convertiti
 # ================================================================
 
-# CMSIS Wrapper sources (pure C + CMSIS-NN)
+# CMSIS Wrapper sources (pure C + CMSIS-NN) - SOLO IL NUOVO WRAPPER CORRETTO
 CMSIS_WRAPPER_SRCS = \
-	../third_party/cmsis_wrapper.c \
-	../third_party/backbone_weights.c \
-	../third_party/streaming_weights.c
+	../third_party/cmsis_wrapper_correct.c \
+	../backbone_real_weights.c \
+	../streaming_real_weights.c
 
 # CMSIS-NN source files (only the ones we need)
-CMSIS_NN_SRCS = $(wildcard ../third_party/CMSIS-NN/Source/ConvolutionFunctions/*.c) \
-                $(wildcard ../third_party/CMSIS-NN/Source/FullyConnectedFunctions/*.c) \
-                $(wildcard ../third_party/CMSIS-NN/Source/SoftmaxFunctions/*.c) \
-                $(wildcard ../third_party/CMSIS-NN/Source/ActivationFunctions/*.c) \
-                $(wildcard ../third_party/CMSIS-NN/Source/BasicMathFunctions/*.c) \
-                $(wildcard ../third_party/CMSIS-NN/Source/NNSupportFunctions/*.c)
+# Include only the specific CMSIS-NN functions we actually use
+CMSIS_NN_SRCS = ../third_party/CMSIS-NN/Source/FullyConnectedFunctions/arm_fully_connected_s8.c \
+                ../third_party/CMSIS-NN/Source/ActivationFunctions/arm_relu_q7.c \
+                ../third_party/CMSIS-NN/Source/NNSupportFunctions/arm_nn_vec_mat_mult_t_s8.c
 
-# Sostituiamo tutto TFLM con CMSIS Wrapper + CMSIS-NN
-TFLM_MINIMAL_SRCS = $(CMSIS_WRAPPER_SRCS) $(CMSIS_NN_SRCS)
+# Complete bridge sources with real weights
+COMPLETE_BRIDGE_SRCS = ../third_party/complete_operators.c \
+                       ../third_party/complete_tflite_bridge.c
+
+# Sostituiamo tutto TFLM con CMSIS Wrapper + CMSIS-NN + Complete Bridge
+TFLM_MINIMAL_SRCS = $(CMSIS_WRAPPER_SRCS) $(CMSIS_NN_SRCS) $(COMPLETE_BRIDGE_SRCS)
+
+# Syscall and AudioConfig stubs for bare-metal environment
+STUB_SRCS = ../src/syscall_stubs.c ../src/audioconfig_stubs.c
 
 # Combine all C sources - MINI-TFLM VERSION (solo C, no C++)
-ALL_CSRC_EXTRA = $(TFLM_MINIMAL_SRCS)
+ALL_CSRC_EXTRA = $(TFLM_MINIMAL_SRCS) $(STUB_SRCS)
 
 # Set the name of the output files
 FILENAME = audiomoth_smart
@@ -109,7 +114,7 @@ COBJCOPY = $(TOOLPATH)arm-none-eabi-objcopy
 COBJDUMP = $(TOOLPATH)arm-none-eabi-objdump
 
 # Challenge-grade optimization flags for <250KB target
-CHALLENGE_OPT = -Os -flto -DNDEBUG -DTFLITE_MCU -DTF_LITE_STATIC_MEMORY -DTF_LITE_DISABLE_X86_NEON
+CHALLENGE_OPT = -Os -DNDEBUG -DTFLITE_MCU -DTF_LITE_STATIC_MEMORY -DTF_LITE_DISABLE_X86_NEON
 
 # Compiler flags with ARM optimizations + Challenge optimization
 CFLAGS = -mcpu=cortex-m4 -mfloat-abi=hard -mfpu=fpv4-sp-d16 -mthumb -Wall '-DARM_MATH_CM4=1' '-D$(TARGET)=1' $(CHALLENGE_OPT) -std=c99

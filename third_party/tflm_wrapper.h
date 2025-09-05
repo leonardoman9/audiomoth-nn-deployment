@@ -3,72 +3,58 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include <stddef.h>  // For size_t
+#include <stddef.h>
+
+// Includiamo common.h per la definizione di TfLiteTensor
+#include "tensorflow/lite/core/c/common.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-// Opaque handles for TensorFlow Lite Micro objects
-typedef void* TFLMModel;
-typedef void* TFLMInterpreter;
-
-// Status codes
-typedef enum {
-    TFLM_OK = 0,
-    TFLM_ERROR = 1,
-    TFLM_INVALID_ARGUMENT = 2,
-    TFLM_OUT_OF_MEMORY = 3
-} TFLMStatus;
-
-// C wrapper functions for TensorFlow Lite Micro
+// Puntatore opaco alla nostra struttura di implementazione C++.
+// Il codice C sa solo che esiste, ma non può vederne il contenuto.
+typedef struct TFLM_Interpreter_s TFLM_Interpreter_t;
 
 /**
- * Create a model from flatbuffer data
+ * @brief Crea e inizializza un interprete TFLM per un dato modello.
+ * 
+ * @param model_data Puntatore ai dati del modello FlatBuffer.
+ * @param model_size Dimensione dei dati del modello.
+ * @param arena Puntatore all'area di memoria per i tensori.
+ * @param arena_size Dimensione dell'arena.
+ * @return Un handle all'interprete creato, o NULL in caso di fallimento.
  */
-TFLMModel tflm_create_model(const unsigned char* model_data, unsigned int model_size);
+TFLM_Interpreter_t* tflm_create_interpreter(
+    const unsigned char* model_data,
+    size_t model_size,
+    uint8_t* arena,
+    size_t arena_size);
 
 /**
- * Create interpreter for a model
+ * @brief Distrugge un interprete e libera le risorse associate.
  */
-TFLMInterpreter tflm_create_interpreter(TFLMModel model, unsigned char* arena, unsigned int arena_size);
+void tflm_destroy_interpreter(TFLM_Interpreter_t* interpreter);
 
 /**
- * Allocate tensors for the interpreter
+ * @brief Esegue l'inferenza del modello.
  */
-TFLMStatus tflm_allocate_tensors(TFLMInterpreter interpreter);
+bool tflm_invoke(TFLM_Interpreter_t* interpreter);
 
 /**
- * Get input tensor data pointer
+ * @brief Ottiene un puntatore al tensore di input.
  */
-float* tflm_get_input_data(TFLMInterpreter interpreter, int input_index);
+TfLiteTensor* tflm_get_input_tensor(TFLM_Interpreter_t* interpreter, int index);
 
 /**
- * Get output tensor data pointer  
+ * @brief Ottiene un puntatore al tensore di output.
  */
-float* tflm_get_output_data(TFLMInterpreter interpreter, int output_index);
+TfLiteTensor* tflm_get_output_tensor(TFLM_Interpreter_t* interpreter, int index);
 
 /**
- * Run inference
+ * @brief Restituisce i byte utilizzati nell'arena dei tensori.
  */
-TFLMStatus tflm_invoke(TFLMInterpreter interpreter);
-
-/**
- * Get tensor dimensions
- */
-int tflm_get_input_dims(TFLMInterpreter interpreter, int input_index, int* dims, int max_dims);
-int tflm_get_output_dims(TFLMInterpreter interpreter, int output_index, int* dims, int max_dims);
-
-/**
- * Get arena usage
- */
-size_t tflm_get_arena_used_bytes(TFLMInterpreter interpreter);
-
-/**
- * Cleanup functions
- */
-void tflm_destroy_interpreter(TFLMInterpreter interpreter);
-void tflm_destroy_model(TFLMModel model);
+uint32_t tflm_get_arena_used_bytes(TFLM_Interpreter_t* interpreter);
 
 #ifdef __cplusplus
 }

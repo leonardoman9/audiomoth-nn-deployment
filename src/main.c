@@ -17,8 +17,8 @@
 static uint32_t timing_start_sec, timing_start_ms;
 static uint32_t timing_end_sec, timing_end_ms;
 
-// VARIABILI GLOBALI PER LEGGERE I RISULTATI DA GDB - 10K TEST
-volatile uint32_t total_time_ms = 0;        // Tempo totale 10K inferenze (ms)
+// VARIABILI GLOBALI PER LEGGERE I RISULTATI DA GDB - 5 INFERENZE REALI
+volatile uint32_t total_time_ms = 0;        // Tempo totale 5 inferenze CMSIS-NN reali (ms)
 volatile uint32_t avg_time_us = 0;          // Tempo medio per inferenza (μs)
 volatile uint32_t time_100_inferences_ms = 0; // Tempo per 100 inferenze (ms)
 volatile uint32_t benchmark_completed = 0;
@@ -363,11 +363,9 @@ int main(void) {
     /* Initialize Neural Network (with LED feedback) */
     /* TEMPORANEAMENTE DISABILITATO PER DEBUG */
 
-    // Signal NN init start - Single green flash
+    // Signal NN init start - Quick flash
     AudioMoth_setGreenLED(true);
-    AudioMoth_delay(100);
     AudioMoth_setGreenLED(false);
-    AudioMoth_delay(200);  // Delay di sicurezza aumentato
     
     // Feed watchdog prima di inizializzare NN (operazione lunga)
     AudioMoth_feedWatchdog();
@@ -376,42 +374,42 @@ int main(void) {
     // nnInitialized = false;  // Era per test sistema base
 
     if (nnInitialized) {
-        // Success: 2 green flashes
-        for (int i = 0; i < 2; i++) {
-            AudioMoth_setGreenLED(true);
-            AudioMoth_delay(150);
-            AudioMoth_setGreenLED(false);
-            AudioMoth_delay(150);
-        }
+        // Success: Quick green flash
+        AudioMoth_setGreenLED(true);
+        AudioMoth_setGreenLED(false);
         
         // START PERFORMANCE BENCHMARK
         performanceBenchmark();
         
-        // End with long green LED
+        // End with LED on to indicate completion
         AudioMoth_setGreenLED(true);
-        AudioMoth_delay(5000);
-        AudioMoth_setGreenLED(false);
         
-        // Infinite loop to prevent normal AudioMoth behavior
-        // IMPORTANTE: Feed watchdog per evitare reset 0xdeadbeee
+        // Loop finito per debug - ~5 secondi
+        for (int i = 0; i < 50; i++) {        
+            AudioMoth_feedWatchdog();
+            AudioMoth_delay(100);
+        }
+        
+        // STOP HERE - Don't continue to normal AudioMoth flow
         while(1) {
-            AudioMoth_feedWatchdog();  // Refresh watchdog ogni ciclo
+            AudioMoth_feedWatchdog();
             AudioMoth_delay(1000);
         }
         
     } else {
-                // Failure: 2 red flashes
-        for (int i = 0; i < 2; i++) {
-            AudioMoth_setRedLED(true);
-            AudioMoth_delay(150);
-    AudioMoth_setRedLED(false);
-            AudioMoth_delay(150);
+        // Failure: Quick red flash
+        AudioMoth_setRedLED(true);
+        AudioMoth_setRedLED(false);
+        
+        // Loop finito per debug - ~5 secondi
+        for (int i = 0; i < 50; i++) {        
+            AudioMoth_feedWatchdog();
+            AudioMoth_delay(100);
         }
         
-        // Infinite loop to prevent normal AudioMoth behavior
-        // IMPORTANTE: Feed watchdog per evitare reset 0xdeadbeee
+        // STOP HERE - Don't continue to normal AudioMoth flow
         while(1) {
-            AudioMoth_feedWatchdog();  // Refresh watchdog ogni ciclo
+            AudioMoth_feedWatchdog();
             AudioMoth_delay(1000);
         }
     }
@@ -1059,14 +1057,8 @@ static void performanceBenchmark(void) {
         }
     }
     
-    // === PATTERN DI INIZIO: 3 LONG blinks ===
-    for (int j = 0; j < 3; j++) {
-        AudioMoth_setGreenLED(true);
-        for (volatile int k = 0; k < 600000; k++);  // Busy wait
-        AudioMoth_setGreenLED(false);
-        for (volatile int k = 0; k < 600000; k++);  // Busy wait
-    }
-    for (volatile int k = 0; k < 2000000; k++);  // Clear pause before test
+    // === PATTERN DI INIZIO: NO DELAY - DIRETTO AL TEST ===
+    // Rimosso per velocizzare il benchmark
     
     // Generate fresh audio data
     fill_random_audio();
@@ -1076,7 +1068,7 @@ static void performanceBenchmark(void) {
     
     START_TIMING();
     
-    const int N = 1000;  // Numero di inferenze per il benchmark
+    const int N = 100;  // Numero di inferenze per il benchmark CMSIS-NN REALE
     for (int i = 0; i < N; i++) {
         // LED debug per ogni iterazione (rallenta, rimuovere per timing puro)
         /*
@@ -1108,12 +1100,24 @@ static void performanceBenchmark(void) {
     // Segna il benchmark come completato
     benchmark_completed = 1;
     
-    // === FINALE: Pattern di successo ===
+    // === FINALE: Pattern di successo CMSIS-NN ===
+    // 10 lampeggi verdi
     for (int i = 0; i < 10; i++) {
         AudioMoth_setGreenLED(true);
-        for (volatile int j = 0; j < 100000; j++);  // Busy wait
+        for (volatile int j = 0; j < 200000; j++);  // Busy wait più lungo
         AudioMoth_setGreenLED(false);
-        for (volatile int j = 0; j < 100000; j++);  // Busy wait
+        for (volatile int j = 0; j < 200000; j++);  // Busy wait più lungo
+    }
+    
+    // Pausa tra i colori
+    for (volatile int j = 0; j < 500000; j++);
+    
+    // 10 lampeggi rossi
+    for (int i = 0; i < 10; i++) {
+        AudioMoth_setRedLED(true);
+        for (volatile int j = 0; j < 200000; j++);  // Busy wait più lungo
+        AudioMoth_setRedLED(false);
+        for (volatile int j = 0; j < 200000; j++);  // Busy wait più lungo
     }
 }
 
