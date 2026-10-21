@@ -12,14 +12,14 @@ order (the order of `allowed_bird_classes` in the training configuration), not t
 the training log: see `docs/VERIFICATION.md` (`kClassNames` in `schedule.c`).
 
 Files: `main_app.c` (hardware glue, follows `makeRecording` of the original firmware), `schedule.c` (pure logic, checked
-on 1,805 cases against Python's `datetime`, see `tests/schedule/`), `fatfs_conf/` (trimmed FatFS), `build_app.sh`
+on 1,816 cases against Python's `datetime`, see `tests/schedule/`), `fatfs_conf/` (trimmed FatFS), `build_app.sh`
 (firmware). The host simulator is in `tests/sim/`.
 
 ## Firmware (measured, GCC 14.3.1 `-Os`)
 
     firmware/app/build_app.sh TFLM_ROOT bird_backbone_int8.tflite     # TFLM from scripts/build_tflm.sh
 
-- Flash: **230,124 B** of 245,760 available (~15.6 KB margin; see `docs/VERIFICATION.md`). Model 94.7 KB, TFLM+CMSIS-NN
+- Flash: **230,380 B** of 245,760 available (~15 KB margin; see `docs/VERIFICATION.md`). Model 94.7 KB, TFLM+CMSIS-NN
   ~57 KB, C tail 27.6 KB, libc/libm ~23 KB, FatFS+SD 7.4 KB, emlib 6.7 KB, audiomoth.c 5 KB.
 - Trimmed FatFS (CP437, 8.3 names, **no exFAT**: use a FAT32 card): saves ~60 KB of tables.
   The complete original AudioMoth firmware (USB, GPS, filters, standard FatFS) takes ~150 KB.

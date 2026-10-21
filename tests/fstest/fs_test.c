@@ -50,7 +50,7 @@ int main(void) {
     /* 3. log lines: open/append/write/close for every window, several sessions */
     float logits[9] = {0.1f, 2.0f, -1, 0, 0, 0, 0, 0, 0.5f};
     for (int i = 0; i < 120; ++i) {
-        char line[64];
+        char line[SCHED_LOG_LINE_MAX];
         uint32_t n = Sched_FormatLogLine(line, seconds + 90 + (uint32_t)i * 6, logits);
         CHECK(AudioMoth_appendFile("LOG.TXT"));
         CHECK(AudioMoth_writeToFile(line, (uint16_t)n));

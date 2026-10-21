@@ -22,8 +22,9 @@ int main(void) {
       uint32_t s = (uint32_t)strtoul(p, &p, 10);
       float lg[9];
       for (int i = 0; i < 9; ++i) lg[i] = strtof(p, &p);
-      char out[64];
+      char out[SCHED_LOG_LINE_MAX];
       uint32_t n = Sched_FormatLogLine(out, s, lg);
+      if (n >= SCHED_LOG_LINE_MAX) { printf("TOO LONG %u\n", n); continue; }
       out[n] = 0;
       fputs(out, stdout);
     }
