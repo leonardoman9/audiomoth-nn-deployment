@@ -124,15 +124,17 @@ uint32_t Sched_TopPercent(const float* logits) {
   const int best = Sched_TopClass(logits);
   float sum = 0.0f;
   for (int i = 0; i < SCHED_CLASSES; ++i) sum += expf(logits[i] - logits[best]);
-  return (uint32_t)(100.0f / sum + 0.5f);
+  const float pct = 100.0f / sum + 0.5f;
+  return pct >= 0.0f && pct < 101.0f ? (uint32_t)pct : 0;  /* NaN/inf logits must not reach the cast */
 }
 
 static uint32_t PutInt(char* out, int32_t v) {
   uint32_t n = 0;
-  if (v < 0) { out[n++] = '-'; v = -v; }
-  char tmp[11];
+  uint32_t m = (uint32_t)v;
+  if (v < 0) { out[n++] = '-'; m = 0u - m; }
+  char tmp[10];
   int d = 0;
-  do { tmp[d++] = (char)('0' + v % 10); v /= 10; } while (v > 0);
+  do { tmp[d++] = (char)('0' + m % 10); m /= 10; } while (m > 0);
   while (d > 0) out[n++] = tmp[--d];
   return n;
 }
@@ -150,7 +152,9 @@ uint32_t Sched_FormatLogLine(char* out, uint32_t seconds, const float* logits) {
   out[n++] = pct >= SCHED_CONFIDENCE_PCT ? 'Y' : 'N';
   for (int i = 0; i < SCHED_CLASSES; ++i) {
     out[n++] = ',';
-    const float v = logits[i] * 100.0f;
+    /* clamped so a broken logit (NaN, inf, huge) cannot overflow the line: 9 x ",-999999" keeps it under SCHED_LOG_LINE_MAX */
+    float v = logits[i] * 100.0f;
+    v = v == v ? (v > 999999.0f ? 999999.0f : (v < -999999.0f ? -999999.0f : v)) : 0.0f;
     n += PutInt(out + n, (int32_t)(v + (v >= 0.0f ? 0.5f : -0.5f)));
   }
   out[n++] = '\n';
