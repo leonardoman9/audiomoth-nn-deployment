@@ -44,7 +44,7 @@ Il firmware AudioMoth originale completo era ~150 KB: FatFS con code page 932 (6
 (CP437, nomi 8.3, **niente exFAT: scheda FAT32**).
 
 ## 6. FatFS + wrapper del file system AudioMoth (test su immagine FAT32)
-`app/fstest/`: FatFS vero con la configurazione ridotta + le funzioni file di `audiomoth.c` copiate alla lettera, su un'immagine
+`tests/fstest/` (`run_fstest.sh`): FatFS vero con la configurazione ridotta + le funzioni file di `audiomoth.c` copiate alla lettera, su un'immagine
 FAT32 da 128 MB. **PASS**: lettura/marcatura di CONFIG.TXT, 120 righe accodate (apri/scrivi/chiudi), file letti correttamente da un
 lettore FAT indipendente (mtools). Trovato e corretto un difetto: `f_rename` fallisce se la destinazione esiste (il simulatore lo
 nascondeva); ora CONFIG.TXT viene sovrascritto con "APPLIED <ora>". Il driver SPI (`microsd.c`, codice del produttore, non modificato)
