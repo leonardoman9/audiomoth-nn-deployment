@@ -19,6 +19,7 @@
 #include <unistd.h>
 
 #include "audiomoth.h"
+#include "model_config.h"
 
 #define RAW_PER_TRANSFER 768u
 #define RAW_RATE_HZ      384000u
@@ -176,7 +177,7 @@ bool sim_BirdPipeline_Finish(float *logits) {
         snprintf(n, sizeof n, "win_%04d.logits", window_index);
         Path(p, "dump", n);
         FILE *f = fopen(p, "wb");
-        if (f) { fwrite(logits, 4, 9, f); fclose(f); }
+        if (f) { fwrite(logits, 4, MODEL_CLASSES, f); fclose(f); }
         window_index += 1;
         SaveState();
     }

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Bird classifier (TFLM backbone + C tail) on emulated Cortex-M4F.
-# Env: PIPE_VEC (builds the PCM->logits program with that vector file), LIBVARIANT (release_with_logs | release), OUTSUFFIX.  Usage: build_bird_qemu.sh TFLM_ROOT MODEL.tflite SPECS.npz TAIL_LIB TAIL_HEADERS_DIR [PY_TF] [ARENA_BYTES]
+# Env: PIPE_VEC (builds the PCM->logits program with that vector file), LIBVARIANT (release_with_logs | release), OUTSUFFIX.  Usage: build_bird_qemu.sh TFLM_ROOT MODEL.tflite SPECS.npz TAIL_LIB GENERATED_DIR (the package's generated/) [PY_TF] [ARENA_BYTES]
 set -e
 TFLM=$(cd "$1" && pwd); MODEL=$2; SPECS=$3; TAILLIB=$4; TAILH=$5; PY=${6:-python3}; ARENA=${7:-163840}
 HERE=$(cd "$(dirname "$0")" && pwd); P=$(cd "$HERE/../../tests/qemu" && pwd); OUT="$HERE/out_bird${OUTSUFFIX:-}"; mkdir -p "$OUT"
@@ -13,7 +13,7 @@ CXXF="$EXTRA_CXXF -std=c++17 -fno-exceptions -fno-rtti -fno-threadsafe-statics -
 # The library variant "release" strips error strings; the same define must reach our own code.
 case "${LIBVARIANT:-release_with_logs}" in release) CXXF="$CXXF -DTF_LITE_STRIP_ERROR_STRINGS";; esac
 "$PY" "$HERE/gen_bird_fw_data.py" "$MODEL" "$SPECS" "$TAILLIB" "$OUT/gen"
-if [ -n "$PIPE_VEC" ]; then rm -f "$OUT/gen/bird_vec.cc"; cp "$PIPE_VEC" "$OUT/gen/pipe_vec.cc"; MAINSRC="$HERE/qemu_pipeline_main.cc"; EXTRA="$HERE/bird_pipeline.cc"; $GCC-gcc $ARCH -Os -fno-math-errno -ffunction-sections -fdata-sections -I"$HERE" -I"$HERE/generated" -c "$HERE/bird_frontend.c" -o "$OUT/bird_frontend.o"; else MAINSRC="$HERE/qemu_bird_main.cc"; EXTRA=""; fi
+if [ -n "$PIPE_VEC" ]; then rm -f "$OUT/gen/bird_vec.cc"; cp "$PIPE_VEC" "$OUT/gen/pipe_vec.cc"; MAINSRC="$HERE/qemu_pipeline_main.cc"; EXTRA="$HERE/bird_pipeline.cc"; $GCC-gcc $ARCH -Os -fno-math-errno -ffunction-sections -fdata-sections -I"$HERE" -I"$TAILH" -c "$HERE/bird_frontend.c" -o "$OUT/bird_frontend.o"; else MAINSRC="$HERE/qemu_bird_main.cc"; EXTRA=""; fi
 sed "s/LENGTH = 64K/LENGTH = 256K/" "$P/link.ld" > "$OUT/link.ld"
 $GCC-gcc $ARCH -Os -c "$P/startup.c" -o "$OUT/startup.o"
 $GCC-gcc $ARCH -Os -ffunction-sections -fdata-sections -I"$HERE" -I"$TAILH" -c "$HERE/bird_tail.c" -o "$OUT/bird_tail.o"

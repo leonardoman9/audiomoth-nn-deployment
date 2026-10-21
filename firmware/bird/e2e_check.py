@@ -30,7 +30,7 @@ for pcm in ref["pcm"]:
     feats = ((it.get_tensor(o["index"]).reshape(301, 32).astype(np.float32) - ozp) * osc).astype(np.float32)
     t = Tail(); tail_lib.BirdTail_Reset(ctypes.byref(t))
     for row in feats: tail_lib.BirdTail_Step(ctypes.byref(t), row.ctypes.data_as(ctypes.POINTER(ctypes.c_float)))
-    out = (ctypes.c_float * 9)(); tail_lib.BirdTail_Finish(ctypes.byref(t), out); got.append(np.array(out))
+    out = (ctypes.c_float * tail_lib.BirdTail_Classes())(); tail_lib.BirdTail_Finish(ctypes.byref(t), out); got.append(np.array(out))
 got = np.stack(got); lg = ref["logits"]
 def sm(x): e = np.exp(x - x.max(1, keepdims=True)); return e / e.sum(1, keepdims=True)
 p_ref, p_got = sm(lg), sm(got)

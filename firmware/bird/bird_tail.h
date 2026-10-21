@@ -7,9 +7,11 @@
 #define BIRD_TAIL_H
 #include <stdint.h>
 
+#include "model_config.h"
+
 #define BIRD_FEATURES 32
 #define BIRD_HIDDEN   64
-#define BIRD_CLASSES  9
+#define BIRD_CLASSES  MODEL_CLASSES
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,6 +29,8 @@ void BirdTail_Reset(BirdTail* t);
 void BirdTail_Step(BirdTail* t, const float* feature);
 // Softmax-weighted context -> classifier logits (length BIRD_CLASSES).
 void BirdTail_Finish(const BirdTail* t, float* logits);
+// Number of logits (for tools that load the tail as a shared library).
+int BirdTail_Classes(void);
 
 #ifdef __cplusplus
 }

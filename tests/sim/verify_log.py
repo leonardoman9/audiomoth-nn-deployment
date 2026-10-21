@@ -1,13 +1,13 @@
 """Checks the simulator's dumped windows against the PyTorch model on the same PCM.
-Usage: python verify_log.py WRENNET_ROOT CKPT WORKDIR"""
-import sys
+Usage: [MODEL_PKG=dir] python verify_log.py WRENNET_ROOT CKPT WORKDIR"""
+import json, os, sys
 from pathlib import Path
 import numpy as np, torch
 root, ckpt, work = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
 sys.path.insert(0, str(root / "tools"))
 from bird_model_export_check import load_model
 m = load_model(ckpt)
-names = ["Bubo bubo","Certhia familiaris","Apus apus","Certhia brachydactyla","Emberiza cia","Lophophanes cristatus","Periparus ater","Poecile montanus","non-bird"]
+names = json.load(open(Path(os.environ.get("MODEL_PKG") or Path(__file__).resolve().parents[2] / "firmware/bird/model") / "model_config.json"))["names"]
 log = (work / "sd" / "LOG.TXT").read_text().splitlines()
 wins = sorted((work / "dump").glob("win_*.pcm"))
 print("log lines", len(log), "dumped windows", len(wins))

@@ -42,8 +42,9 @@ Lophophanes cristatus, Periparus ater, Poecile montanus, non-bird.
 - For the tests only: `cc`/`clang`, `qemu-system-arm`, `mtools`. Comparisons against the model also need a Python
   environment with `ai_edge_litert`, `torch`, `torchaudio`, `soundfile`.
 
-The model that goes into the firmware is in this repository: `firmware/bird/model/bird_backbone_int8.tflite`
-(sha256 `6f77fa86…`, from the WrenNet repository, `docs/deployment/bird/`). The PyTorch checkpoint
+The model that goes into the firmware is in this repository, as a **model package** in `firmware/bird/model/`
+(int8 backbone `bird_backbone_int8.tflite`, sha256 `6f77fa86…`, from the WrenNet repository, plus the generated C
+headers and the class list; see "Other models" below). The PyTorch checkpoint
 (`best_distillation_model.pt`) and `bird_reference.npz` from WrenNet are only needed for the comparisons against PyTorch.
 
 ## Build
@@ -51,7 +52,7 @@ The model that goes into the firmware is in this repository: `firmware/bird/mode
 ```sh
 scripts/setup_tflm.sh    # fetches tflite-micro at the verified commit (e0021ca) and applies firmware/patches/tflm-no-int4.patch
 scripts/build_tflm.sh    # builds TFLM for Cortex-M4F; the first run downloads GCC and CMSIS (a few minutes)
-firmware/app/build_app.sh third_party/tflite-micro firmware/bird/model/bird_backbone_int8.tflite
+firmware/app/build_app.sh third_party/tflite-micro firmware/bird/model
 ```
 
 The output is `firmware/app/out/bird_logger.bin`, together with `bird_logger.axf`. The script prints the size:
@@ -61,8 +62,26 @@ firmware exceeds 244 KB.
 The **diagnostic firmware** records WAV files instead of classifying. Use it to check the microphone on a real board:
 
 ```sh
-EXTRA_CF=-DBIRD_DIAG_RECORD firmware/app/build_app.sh third_party/tflite-micro firmware/bird/model/bird_backbone_int8.tflite
+EXTRA_CF=-DBIRD_DIAG_RECORD firmware/app/build_app.sh third_party/tflite-micro firmware/bird/model
 ```
+
+### Other models
+
+The firmware takes the model from a **model package** folder: the int8 backbone, the generated C headers (learned
+filterbank, tail weights, `model_config.h`) and `model_config.json`. The layout and the generator of each file are in
+[firmware/bird/model/README.md](firmware/bird/model/README.md). The architecture is fixed (WrenNet: 32 kHz, 3 s
+windows); the number of classes, their names, the "nothing of interest" class, the daily window and the confidence
+threshold come from the package:
+
+```sh
+python3 firmware/bird/gen_model_config.py path/to/package --names "Species A,Species B,background" \
+    --window-start 05:30 --window-minutes 10 --confidence 60
+firmware/app/build_app.sh third_party/tflite-micro path/to/package
+```
+
+Each class costs ~88 B of flash, so up to **~180 classes** fit; beyond that the link fails with "FLASH memory
+overflowed". `tests/make_test_package.py` makes packages with any number of classes (meaningless weights) to test the
+firmware; CI runs every test with the default model and with 3- and 40-class packages.
 
 ## Using the board
 
@@ -120,10 +139,10 @@ Everything below also runs on every push in GitHub Actions (`.github/workflows/c
 TFLM library: `HOST=1 scripts/build_tflm.sh`.
 
 ```sh
-T=third_party/tflite-micro; M=firmware/bird/model/bird_backbone_int8.tflite
+T=third_party/tflite-micro; M=firmware/bird/model    # or another model package; the Python tests read MODEL_PKG
 
 # schedule and log logic: 1,816 cases checked against Python's datetime
-cc -Ifirmware/app firmware/app/schedule.c tests/schedule/test_schedule.c -lm -o /tmp/ts && python3 tests/schedule/test_schedule.py /tmp/ts
+cc -Ifirmware/app -I$M/generated firmware/app/schedule.c tests/schedule/test_schedule.c -lm -o /tmp/ts && python3 tests/schedule/test_schedule.py /tmp/ts
 
 # simulator: main_app.c and the real pipeline on a software model of the board, over several simulated days
 tests/sim/build_sim.sh $T $M
@@ -137,11 +156,11 @@ SAN=1 OUTSUFFIX=_san tests/sim/build_sim.sh $T $M      # with AddressSanitizer +
 python3 tests/sim/run_faults.py tests/sim/out_san/bird_logger_sim audio.raw /tmp/faults
 
 # file system: the real FatFS on a FAT32 image (for example: mformat -C -F -T 262144 -i card.img ::)
-tests/fstest/run_fstest.sh card.img
+tests/fstest/run_fstest.sh card.img $M
 ```
 
 The full pipeline on an emulated Cortex-M4F (PCM to logits, compared with the host pipeline and PyTorch):
-`tests/qemu/run_qemu_pipeline.sh $T python3` (needs `qemu-system-arm`, numpy and `ai_edge_litert`). The instruction and
+`tests/qemu/run_qemu_pipeline.sh $T python3 $M` (needs `qemu-system-arm`, numpy and `ai_edge_litert`). The instruction and
 memory profile uses `firmware/bird/build_bird_qemu.sh` and `tools/memcount.c`. Procedure and results are in
 [docs/VERIFICATION.md](docs/VERIFICATION.md).
 
@@ -149,7 +168,8 @@ memory profile uses `firmware/bird/build_bird_qemu.sh` and `tools/memcount.c`. P
 
 ```
 firmware/app      application: main_app.c (hardware), schedule.c (schedule and log), fatfs_conf/, build_app.sh
-firmware/bird     front-end, TFLM backbone, GRU/attention tail, generated tables, QEMU and generator scripts
+firmware/bird     front-end, TFLM backbone, GRU/attention tail, QEMU and generator scripts
+firmware/bird/model  default model package (int8 backbone, generated headers, class list, test vectors)
 firmware/patches  TFLM patch (removes the int4 kernels, saves flash)
 vendor/audiomoth  AudioMoth hardware library (emlib, FatFS, drivers, audiomoth.c) from AudioMoth-Firmware-Basic
 tests/            sim (simulator, fault injection, long runs), fstest (FatFS), schedule, qemu (pipeline test + vectors)

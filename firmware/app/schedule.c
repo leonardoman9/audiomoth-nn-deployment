@@ -2,15 +2,9 @@
 
 #include <math.h>
 
-/* Names in the order of the model's OUTPUT INDICES. This is the order of `allowed_bird_classes` in the training
- * config (0 Bubo bubo, 1 Certhia familiaris, 2 Apus apus, 3 Certhia brachydactyla, 4 Emberiza cia,
- * 5 Lophophanes cristatus, 6 Periparus ater, 7 Poecile montanus, 8 non-bird). It is NOT the order of the
- * "Class names" line of the training log (which comes from the soft-label metadata and only labels the report).
- * Evidence: (1) the per-class test supports of the training report match 15% of the file counts of the
- * dataset folders only in this order; (2) the checkpoint run on real recordings predicts, for Apus apus,
- * Bubo bubo, Emberiza cia, Periparus ater and Poecile montanus, exactly these indices (74% of windows). */
-static const char* const kClassNames[SCHED_CLASSES] = {
-    "Bubo bubo", "Certhia familiaris", "Apus apus", "Certhia brachydactyla", "Emberiza cia", "Lophophanes cristatus", "Periparus ater", "Poecile montanus", "non-bird"};
+/* In the model's output index order. For the default bird model, why this order and not the one in the training log:
+ * firmware/bird/model/README.md. */
+static const char* const kClassNames[SCHED_CLASSES] = {MODEL_CLASS_NAMES};
 
 const char* Sched_ClassName(int index) { return index >= 0 && index < SCHED_CLASSES ? kClassNames[index] : "?"; }
 
@@ -157,7 +151,7 @@ uint32_t Sched_FormatLogLine(char* out, uint32_t seconds, const float* logits) {
   out[n++] = pct >= SCHED_CONFIDENCE_PCT ? 'Y' : 'N';
   for (int i = 0; i < SCHED_CLASSES; ++i) {
     out[n++] = ',';
-    /* clamped so a broken logit (NaN, inf, huge) cannot overflow the line: 9 x ",-999999" keeps it under SCHED_LOG_LINE_MAX */
+    /* clamped so a broken logit (NaN, inf, huge) cannot overflow the line: ",-999999" per class is in SCHED_LOG_LINE_MAX */
     float v = logits[i] * 100.0f;
     v = v == v ? (v > 999999.0f ? 999999.0f : (v < -999999.0f ? -999999.0f : v)) : 0.0f;
     n += PutInt(out + n, (int32_t)(v + (v >= 0.0f ? 0.5f : -0.5f)));

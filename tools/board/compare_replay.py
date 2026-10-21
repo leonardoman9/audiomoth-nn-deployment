@@ -10,8 +10,9 @@ want = open(expected).read().strip().split(",")
 got = [l.strip().split(",") for l in open(log, errors="replace") if l.startswith("REPLAY,")]
 if not got: sys.exit("FAIL: no REPLAY line in LOG.TXT (did the board find REPLAY.PCM? 6 red blinks = malformed file)")
 got = got[-1]
-dw = [int(x) / 100 for x in want[-9:]]
-dg = [int(x) / 100 for x in got[-9:]]
+dw = [int(x) / 100 for x in want[5:]]   # REPLAY,<time>,<class>,<pct>,<Y|N>,<logits...>
+dg = [int(x) / 100 for x in got[5:]]
+if len(dw) != len(dg): sys.exit(f"FAIL: {len(dg)} logits on the board, {len(dw)} expected (different model?)")
 diff = max(abs(a - b) for a, b in zip(dw, dg))
 same_class = want[2] == got[2]
 print("expected:", ",".join(want[2:]))

@@ -1,13 +1,17 @@
 """Checks LOG.TXT of a long simulator run (run_scenario.py over many days).
-Usage: python check_long_run.py WORKDIR FIRST_DATE DAYS [MIN MAX]      (e.g. 2027-12-30 400)
-Every calendar day must appear, in order, with MIN-MAX lines (default 40-50 for the simulator, one per ~6 s; LED
-blinks after confident windows take some of the time; a real board gives fewer), all inside 07:00-07:05, times strictly
+Usage: [MODEL_PKG=dir] python check_long_run.py WORKDIR FIRST_DATE DAYS [MIN MAX]      (e.g. 2027-12-30 400)
+Every calendar day must appear, in order, with MIN-MAX lines (default 80-100 % of one per 6 s of window, as in the simulator; LED
+blinks after confident windows take some of the time; a real board gives fewer), all inside the package's daily window, times strictly
 increasing, well-formed lines and no broken (clamped) logits. Prints the per-day line count and the LOG.TXT size."""
-import collections, datetime, sys
+import collections, datetime, json, os, sys
 from pathlib import Path
+# classes and window of the model package: MODEL_PKG, default firmware/bird/model
+CFG = json.load(open(Path(os.environ.get("MODEL_PKG") or Path(__file__).resolve().parents[2] / "firmware/bird/model") / "model_config.json"))
+W0, WL = CFG["window_start_s"], CFG["window_length_s"]
+T0, T1 = datetime.time(W0 // 3600, W0 % 3600 // 60), datetime.time((W0 + WL) // 3600, (W0 + WL) % 3600 // 60)
 
 work, first, days = Path(sys.argv[1]), datetime.date.fromisoformat(sys.argv[2]), int(sys.argv[3])
-lo, hi = (int(sys.argv[4]), int(sys.argv[5])) if len(sys.argv) > 5 else (40, 50)
+lo, hi = (int(sys.argv[4]), int(sys.argv[5])) if len(sys.argv) > 5 else (int(0.8 * WL / 6), WL // 6)
 log = work / "sd" / "LOG.TXT"
 lines = log.read_text().splitlines()
 errors, per_day, prev = [], collections.OrderedDict(), None
@@ -15,11 +19,11 @@ for i, l in enumerate(lines):
     f = l.split(",")
     try:
         t = datetime.datetime.strptime(f[0], "%Y-%m-%d %H:%M:%S")
-        ok = len(f) == 13 and f[3] in "YN" and 0 <= int(f[2]) <= 100 and all(abs(int(x)) < 999999 for x in f[4:])
+        ok = len(f) == 4 + CFG["classes"] and f[3] in "YN" and 0 <= int(f[2]) <= 100 and all(abs(int(x)) < 999999 for x in f[4:])
     except ValueError:
         ok = False
     if not ok: errors.append(f"line {i + 1} malformed: {l!r}"); continue
-    if not (datetime.time(7, 0) <= t.time() < datetime.time(7, 5)): errors.append(f"line {i + 1} outside the window: {l[:19]}")
+    if not (T0 <= t.time() < T1): errors.append(f"line {i + 1} outside the window: {l[:19]}")
     if prev and t <= prev: errors.append(f"line {i + 1} not after the previous one: {l[:19]}")
     prev = t
     per_day[t.date()] = per_day.get(t.date(), 0) + 1

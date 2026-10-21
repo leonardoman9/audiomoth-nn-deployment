@@ -32,7 +32,7 @@ c.BirdTail_Reset.argtypes = [ctypes.POINTER(Tail)]
 t = Tail(); c.BirdTail_Reset(ctypes.byref(t))
 for row in feats:
     c.BirdTail_Step(ctypes.byref(t), row.ctypes.data_as(ctypes.POINTER(ctypes.c_float)))
-logits = (ctypes.c_float * 9)(); c.BirdTail_Finish(ctypes.byref(t), logits)
+logits = (ctypes.c_float * c.BirdTail_Classes())(); c.BirdTail_Finish(ctypes.byref(t), logits)
 print("expected logits", np.round(np.array(logits), 4))
 
 

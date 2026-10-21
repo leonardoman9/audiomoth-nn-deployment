@@ -3,13 +3,15 @@
 #define NN_BIRD_H
 #include <stdbool.h>
 #include <stdint.h>
+
+#include "model_config.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #define NNB_FRAMES 301
 #define NNB_MELS   64
-#define NNB_CLASSES 9
+#define NNB_CLASSES MODEL_CLASSES
 
 // Loads the backbone into its arena (external SRAM on the AudioMoth).
 bool NNBird_Init(void);

@@ -76,3 +76,5 @@ void BirdTail_Finish(const BirdTail* t, float* logits) {
   MATVEC(logits, BIRD_CLASSES, BIRD_HIDDEN, k_w_f, k_w_f_scale, ctx);
   for (int i = 0; i < BIRD_CLASSES; ++i) logits[i] += k_b_f[i];
 }
+
+int BirdTail_Classes(void) { return BIRD_CLASSES; }
