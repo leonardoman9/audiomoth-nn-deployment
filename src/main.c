@@ -9,8 +9,9 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdbool.h>
+#include "em_gpio.h"
 
- #include "audioMoth.h"
+#include "audioMoth.h"
 #include "nn/nn_model.h"
 
 // Timing semplificato usando getTime di AudioMoth (più sicuro)
@@ -34,6 +35,41 @@ static uint32_t get_elapsed_ms(void) {
     uint32_t elapsed = (timing_end_sec - timing_start_sec) * 1000 + 
                       (timing_end_ms - timing_start_ms);
     return elapsed;
+}
+
+/* Debug GPIO (benchmark window and completion pulse) */
+
+#define DEBUG_WINDOW_GPIOPORT gpioPortB
+#define DEBUG_WINDOW_PIN      9   /* U1_TX#2 pad */
+
+#define DEBUG_DONE_GPIOPORT   gpioPortB
+#define DEBUG_DONE_PIN        3   /* Keep PB3 for overall DONE pulse */
+
+/* Separate GPIOs for pre/post benchmark spikes on Dev board */
+#define DEBUG_PRE_GPIOPORT  gpioPortB
+#define DEBUG_PRE_PIN       10  /* U1_RX#2 pad */
+#define DEBUG_POST_GPIOPORT gpioPortA
+#define DEBUG_POST_PIN      8   /* TIM2_CC0#0 pad */
+
+static inline void DEBUG_PRE_PULSE(void) {
+    GPIO_PinOutSet(DEBUG_PRE_GPIOPORT, DEBUG_PRE_PIN);
+    for (volatile int i = 0; i < 2000; i++);
+    GPIO_PinOutClear(DEBUG_PRE_GPIOPORT, DEBUG_PRE_PIN);
+}
+
+static inline void DEBUG_POST_PULSE(void) {
+    GPIO_PinOutSet(DEBUG_POST_GPIOPORT, DEBUG_POST_PIN);
+    for (volatile int i = 0; i < 2000; i++);
+    GPIO_PinOutClear(DEBUG_POST_GPIOPORT, DEBUG_POST_PIN);
+}
+
+#define DEBUG_WINDOW_HIGH()   GPIO_PinOutSet(DEBUG_WINDOW_GPIOPORT, DEBUG_WINDOW_PIN)
+#define DEBUG_WINDOW_LOW()    GPIO_PinOutClear(DEBUG_WINDOW_GPIOPORT, DEBUG_WINDOW_PIN)
+
+static inline void DEBUG_DONE_PULSE(void) {
+    GPIO_PinOutSet(DEBUG_DONE_GPIOPORT, DEBUG_DONE_PIN);
+    for (volatile int i = 0; i < 2000; i++); /* ~short pulse */
+    GPIO_PinOutClear(DEBUG_DONE_GPIOPORT, DEBUG_DONE_PIN);
 }
 
 /* Sleep and LED constants */
@@ -360,6 +396,12 @@ int main(void) {
 
     AudioMoth_initialise();
 
+    /* Configure debug GPIOs (PB9 window, PB10 PRE, PA8 POST, PB3 DONE) */
+    GPIO_PinModeSet(DEBUG_WINDOW_GPIOPORT, DEBUG_WINDOW_PIN, gpioModePushPull, 0);
+    GPIO_PinModeSet(DEBUG_DONE_GPIOPORT, DEBUG_DONE_PIN, gpioModePushPull, 0);
+    GPIO_PinModeSet(DEBUG_PRE_GPIOPORT,  DEBUG_PRE_PIN,  gpioModePushPull, 0);
+    GPIO_PinModeSet(DEBUG_POST_GPIOPORT, DEBUG_POST_PIN, gpioModePushPull, 0);
+
     /* Initialize Neural Network (with LED feedback) */
     /* TEMPORANEAMENTE DISABILITATO PER DEBUG */
 
@@ -378,8 +420,11 @@ int main(void) {
         AudioMoth_setGreenLED(true);
         AudioMoth_setGreenLED(false);
         
-        // START PERFORMANCE BENCHMARK
+        // START PERFORMANCE BENCHMARK (GPIO window high during entire benchmark)
+        DEBUG_WINDOW_HIGH();
         performanceBenchmark();
+        DEBUG_WINDOW_LOW();
+        DEBUG_DONE_PULSE();
         
         // End with LED on to indicate completion
         AudioMoth_setGreenLED(true);
@@ -1066,6 +1111,8 @@ static void performanceBenchmark(void) {
     // === TIMING TEST: N INFERENZE ===
     AudioMoth_setRedLED(true);  // Indica inizio test
     
+    /* PRE spike on dedicated GPIO */
+    DEBUG_PRE_PULSE();
     START_TIMING();
     
     const int N = 100;  // Numero di inferenze per il benchmark CMSIS-NN REALE
@@ -1086,6 +1133,8 @@ static void performanceBenchmark(void) {
     }
     
     end_cycles = END_TIMING();
+    /* POST spike on dedicated GPIO */
+    DEBUG_POST_PULSE();
     AudioMoth_setRedLED(false);  // Fine test
     
     // Calcoli risultati

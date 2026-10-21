@@ -31,9 +31,9 @@ extern "C" {
 #define NN_MAX_DETECTIONS_PER_SEC   2       // REDUCED: From 5 to 2 detections
 
 // Audio Processing Configuration
-#define NN_SAMPLE_RATE              48000   // AudioMoth sample rate
+#define NN_SAMPLE_RATE              16000   // AudioMoth sample rate (aligned to report)
 #define NN_FRAME_SIZE               1024    // Samples per frame
-#define NN_HOP_LENGTH               512     // Hop length for STFT
+#define NN_HOP_LENGTH               1024    // Hop length for STFT (no overlap, matches report)
 
 // Class Labels (placeholder - to be updated with real bird classes)
 extern const char* NN_CLASS_NAMES[NN_NUM_CLASSES];

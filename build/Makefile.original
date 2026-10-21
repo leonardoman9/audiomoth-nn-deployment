@@ -16,8 +16,42 @@ TOOLPATH = $(TOOLCHAIN_PATH)/$(TOOLCHAIN_VERSION)/bin/
 
 # These are the locations of the source and header files
 
-INC = ../cmsis ../device/inc ../emlib/inc ../emusb/inc ../drivers/inc ../fatfs/inc  ../gps/inc ../inc ../inc/nn ../third_party
-SRC = ../device/src ../emlib/src ../emusb/src ../drivers/src ../fatfs/src ../src ../src/nn ../third_party
+#INC and SRC definitions
+INC = ../cmsis ../device/inc ../emlib/inc ../emusb/inc ../drivers/inc ../fatfs/inc  ../gps/inc ../inc ../inc/nn ../third_party \
+      ../third_party/CMSIS-NN/Include \
+      ../third_party/CMSIS-NN/Include/Internal
+SRC = ../device/src ../emlib/src ../emusb/src ../drivers/src ../fatfs/src ../src ../src/nn ../third_party \
+      ../third_party/CMSIS-NN/Source/ActivationFunctions \
+      ../third_party/CMSIS-NN/Source/BasicMathFunctions \
+      ../third_party/CMSIS-NN/Source/ConcatenationFunctions \
+      ../third_party/CMSIS-NN/Source/ConvolutionFunctions \
+      ../third_party/CMSIS-NN/Source/FullyConnectedFunctions \
+      ../third_party/CMSIS-NN/Source/LSTMFunctions \
+      ../third_party/CMSIS-NN/Source/NNSupportFunctions \
+      ../third_party/CMSIS-NN/Source/PadFunctions \
+      ../third_party/CMSIS-NN/Source/PoolingFunctions \
+      ../third_party/CMSIS-NN/Source/ReshapeFunctions \
+      ../third_party/CMSIS-NN/Source/SoftmaxFunctions \
+      ../third_party/CMSIS-NN/Source/SVDFunctions \
+      ../third_party/CMSIS-NN/Source/TransposeFunctions
+
+# Add CMSIS-NN (expects the repo at ../third_party/CMSIS-NN)
+CMSIS_NN_PATH = ../third_party/CMSIS-NN
+
+# CMSIS-NN include directory
+INC += $(CMSIS_NN_PATH)/Include
+
+# CMSIS-NN source directories (each subfolder contains .c files)
+SRC += $(CMSIS_NN_PATH)/Source/ActivationFunctions \
+       $(CMSIS_NN_PATH)/Source/BasicMathFunctions \
+       $(CMSIS_NN_PATH)/Source/ConcatenationFunctions \
+       $(CMSIS_NN_PATH)/Source/ConvolutionFunctions \
+       $(CMSIS_NN_PATH)/Source/FullyConnectedFunctions \
+       $(CMSIS_NN_PATH)/Source/NNSupportFunctions \
+       $(CMSIS_NN_PATH)/Source/PoolingFunctions \
+       $(CMSIS_NN_PATH)/Source/ReshapeFunctions \
+       $(CMSIS_NN_PATH)/Source/SVDF \
+       $(CMSIS_NN_PATH)/Source/SoftmaxFunctions
 # Exclude modules for NN-only mode (no audio recording needed)
 # Safe to remove for inference-only testing:
 EXCLUDED_FILES = ../emlib/src/em_crypto.c \
@@ -76,7 +110,7 @@ COBJCOPY = $(TOOLPATH)arm-none-eabi-objcopy
 
 COBJDUMP = $(TOOLPATH)arm-none-eabi-objdump
 
-CFLAGS = -mcpu=cortex-m4 -mfloat-abi=hard -mfpu=fpv4-sp-d16 -mthumb -Wall '-DARM_MATH_CM4=1' '-D$(TARGET)=1' -g
+CFLAGS = -mcpu=cortex-m4 -mfloat-abi=hard -mfpu=fpv4-sp-d16 -mthumb -Wall '-DARM_MATH_CM4=1' '-DARM_MATH_DSP=1' '-D$(TARGET)=1' -g
 
 DFLAGS = -MMD
 
