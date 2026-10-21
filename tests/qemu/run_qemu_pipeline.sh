@@ -11,4 +11,4 @@ PIPE_VEC="$HERE/vectors/pipe_vec.cc" OUTSUFFIX=_ci sh "$B/build_bird_qemu.sh" "$
   "$HERE/vectors/specs_one.npz" "$OUT/libtail.$EXT" "$B/generated" "$PY"
 qemu-system-arm -M mps2-an386 -cpu cortex-m4 -display none -serial none -monitor none \
   -semihosting-config enable=on,target=native -kernel "$B/out_bird_ci/fw.elf" 2>&1 | tee "$OUT/qemu.txt"   # some QEMU builds print semihosting output on stderr
-grep -q '^PASS' "$OUT/qemu.txt"
+tr -d '\r' < "$OUT/qemu.txt" | grep -q '^PASS'
