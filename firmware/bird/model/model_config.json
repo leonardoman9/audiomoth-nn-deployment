@@ -1,0 +1,18 @@
+{
+  "classes": 9,
+  "names": [
+    "Bubo bubo",
+    "Certhia familiaris",
+    "Apus apus",
+    "Certhia brachydactyla",
+    "Emberiza cia",
+    "Lophophanes cristatus",
+    "Periparus ater",
+    "Poecile montanus",
+    "non-bird"
+  ],
+  "negative": 8,
+  "window_start_s": 25200,
+  "window_length_s": 300,
+  "confidence_pct": 50
+}

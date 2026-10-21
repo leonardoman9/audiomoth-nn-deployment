@@ -14,7 +14,7 @@ log = (work / "sd" / "LOG.TXT").read_text().splitlines()
 print("exit", r.returncode, "| LED:", sorted(set(l for l in r.stdout.splitlines() if "LED" in l)), "| REPLAY.PCM now", (work / "sd" / "REPLAY.PCM").stat().st_size, "bytes")
 print("log:", log[0][:110], "...")
 f = log[0].split(",")
-dev = np.array([int(x) / 100 for x in f[-9:]]); pt = ref["logits"][idx]
+dev = np.array([int(x) / 100 for x in f[5:]]); pt = ref["logits"][idx]
 print("device logits(x100 rounding) vs PyTorch: max|d| = %.3f | argmax device=%d torch=%d | window %s" % (np.abs(dev - pt).max(), dev.argmax(), pt.argmax(), ref["names"][idx]))
 # second boot must NOT replay again
 r2 = subprocess.run([binary], env=env, capture_output=True, text=True)

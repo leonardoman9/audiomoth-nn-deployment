@@ -48,7 +48,7 @@ int main(void) {
     CHECK(AudioMoth_openFile("OLD.TXT") && AudioMoth_writeToFile("x", 1) && AudioMoth_closeFile());
     CHECK(!AudioMoth_renameFile("CONFIG.TXT", "OLD.TXT"));   /* FR_EXIST */
     /* 3. log lines: open/append/write/close for every window, several sessions */
-    float logits[9] = {0.1f, 2.0f, -1, 0, 0, 0, 0, 0, 0.5f};
+    float logits[SCHED_CLASSES] = {0.1f, 2.0f, -1.0f};
     for (int i = 0; i < 120; ++i) {
         char line[SCHED_LOG_LINE_MAX];
         uint32_t n = Sched_FormatLogLine(line, seconds + 90 + (uint32_t)i * 6, logits);

@@ -1,8 +1,8 @@
 /*
- * WrenNet bird logger for the AudioMoth.
+ * WrenNet logger for the AudioMoth.
  *
- * Every day at 07:00 (device clock) for 5 minutes: record 3 s windows at 32 kHz, classify each with
- * the on-device bird model and append one line per window to LOG.TXT on the SD card
+ * Every day in the window of the model package (default 07:00 for 5 minutes, device clock): record 3 s windows at
+ * 32 kHz, classify each with the on-device model and append one line per window to LOG.TXT on the SD card
  * ("2026-10-21 07:00:12,Apus apus,83,Y"). Outside that window the device stays powered down.
  *
  * The clock is set from CONFIG.TXT on the SD card (one line "YYYY-MM-DD hh:mm:ss"); the file is
@@ -209,7 +209,7 @@ static void RunSession(void) {
         char line[SCHED_LOG_LINE_MAX];
         const uint32_t length = Sched_FormatLogLine(line, now, logits);
         LogLine(line, length);
-        if (Sched_TopPercent(logits) >= SCHED_CONFIDENCE_PCT && Sched_TopClass(logits) != SCHED_CLASSES - 1) Blink(true, 1);
+        if (Sched_TopPercent(logits) >= SCHED_CONFIDENCE_PCT && Sched_TopClass(logits) != MODEL_NEGATIVE_CLASS) Blink(true, 1);
     }
     AudioMoth_disableMicrophone();
     AudioMoth_disableFileSystem();

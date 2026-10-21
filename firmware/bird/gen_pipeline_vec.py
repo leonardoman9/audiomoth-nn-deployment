@@ -26,7 +26,7 @@ it.set_tensor(i["index"], q.reshape(i["shape"])); it.invoke()
 f = ((it.get_tensor(o["index"]).reshape(301, 32).astype(np.float32) - o["quantization"][1]) * o["quantization"][0]).astype(np.float32)
 t = Tail(); tail_lib.BirdTail_Reset(ctypes.byref(t))
 for row in f: tail_lib.BirdTail_Step(ctypes.byref(t), row.ctypes.data_as(ctypes.POINTER(ctypes.c_float)))
-host = (ctypes.c_float * 9)(); tail_lib.BirdTail_Finish(ctypes.byref(t), host)
+host = (ctypes.c_float * tail_lib.BirdTail_Classes())(); tail_lib.BirdTail_Finish(ctypes.byref(t), host)
 print("window", ref["names"][idx], "| host pipeline logits", np.round(np.array(host), 3), "| torch", np.round(ref["logits"][idx], 3))
 def arr(name, a, ctype, fmt):
     return f'extern "C" {ctype} {name}[{a.size}] __attribute__((section(".testdata"), aligned(16))) = {{{",".join(fmt(v) for v in a.reshape(-1))}}};\n'

@@ -1,5 +1,5 @@
 /*
- * Generates firmware/bird/generated/bird_frontend_tables.h: the constant tables of the bird front-end
+ * Generates <model package>/generated/bird_frontend_tables.h: the constant tables of the bird front-end
  * (FFT twiddles, bit reversal, filterbank taps), from the learned filterbank parameters of the checkpoint.
  * Host program; uses the same float formulas that were verified against PyTorch (check_frontend.py).
  *   cc -O2 gen_frontend_tables.c -lm -o gen && ./gen 3745.8291015625 92.80845642089844 150 16000 > bird_frontend_tables.h

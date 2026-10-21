@@ -1,9 +1,13 @@
 """Checks schedule.c (parsing, formatting, window logic, log line) against Python's datetime/numpy.
-Usage: python test_schedule.py PATH_TO_test_schedule_BINARY   (binary: cc -I. schedule.c test_schedule.c -lm)"""
-import datetime, math, random, subprocess, sys
+Usage: [MODEL_PKG=dir] python test_schedule.py PATH_TO_test_schedule_BINARY
+  binary: cc -Ifirmware/app -I<package>/generated firmware/app/schedule.c tests/schedule/test_schedule.c -lm"""
+import datetime, json, math, os, random, subprocess, sys
+from pathlib import Path
 import numpy as np
 S = sys.argv[1]
-NAMES = ["Bubo bubo","Certhia familiaris","Apus apus","Certhia brachydactyla","Emberiza cia","Lophophanes cristatus","Periparus ater","Poecile montanus","non-bird"]
+# classes and window of the model package: MODEL_PKG, default firmware/bird/model
+CFG = json.load(open(Path(os.environ.get("MODEL_PKG") or Path(__file__).resolve().parents[2] / "firmware/bird/model") / "model_config.json"))
+NAMES, N, W0, WL, CONF = CFG["names"], CFG["classes"], CFG["window_start_s"], CFG["window_length_s"], CFG["confidence_pct"]
 rnd = random.Random(4); cases = []; expect = []
 epoch = datetime.datetime(1970, 1, 1)
 def unix(dt): return int((dt - epoch).total_seconds())
@@ -11,22 +15,23 @@ for _ in range(400):
     dt = datetime.datetime(2020, 1, 1) + datetime.timedelta(seconds=rnd.randrange(0, 80 * 365 * 86400)); s = unix(dt)
     cases.append(f"parse {dt:%Y-%m-%d %H:%M:%S}\n"); expect.append(f"{s}\n")
     cases.append(f"fmt {s}\n"); expect.append(f"{dt:%Y-%m-%d %H:%M:%S}\n")
-    t = s % 86400; inw = int(25200 <= t < 25500); to_next = 0 if inw else (25200 - t if t < 25200 else 86400 - t + 25200); left = 25500 - t if inw else 0
+    t = s % 86400; inw = int(W0 <= t < W0 + WL); to_next = 0 if inw else (W0 - t if t < W0 else 86400 - t + W0); left = W0 + WL - t if inw else 0
     cases.append(f"win {s}\n"); expect.append(f"{inw} {to_next} {left}\n")
 def r100(x):
     v = np.float32(x) * np.float32(100.0); return int(v + (np.float32(0.5) if v >= 0 else np.float32(-0.5)))
 for _ in range(600):
-    lg = [rnd.uniform(-9, 9) for _ in range(9)]; s = rnd.randrange(1700000000, 1900000000)
+    lg = [rnd.uniform(-9, 9) for _ in range(N)]; s = rnd.randrange(1700000000, 1900000000)
     cases.append(f"log {s} " + " ".join(f"{x:.6f}" for x in lg) + "\n")
-    l32 = [np.float32(float(f"{x:.6f}")) for x in lg]; b = max(range(9), key=lambda i: l32[i])
+    l32 = [np.float32(float(f"{x:.6f}")) for x in lg]; b = max(range(N), key=lambda i: l32[i])
     z = sum(math.exp(float(x - l32[b])) for x in l32); pct = int(100 / z + 0.5)
     dt = epoch + datetime.timedelta(seconds=s)
-    expect.append(f"{dt:%Y-%m-%d %H:%M:%S},{NAMES[b]},{pct},{'Y' if pct >= 50 else 'N'}," + ",".join(str(r100(x)) for x in l32) + "\n")
+    expect.append(f"{dt:%Y-%m-%d %H:%M:%S},{NAMES[b]},{pct},{'Y' if pct >= CONF else 'N'}," + ",".join(str(r100(x)) for x in l32) + "\n")
 # broken logits (NaN, inf, huge) must give a bounded, well-formed line: values clamped to +-999999, NaN -> 0
-for lg, want in [(["nan"] * 9, "Bubo bubo,0,N," + ",".join(["0"] * 9)),
-                 (["inf"] + ["0"] * 8, "Bubo bubo,0,N,999999," + ",".join(["0"] * 8)),
-                 (["-1e30"] * 9, "Bubo bubo,11,N," + ",".join(["-999999"] * 9)),
-                 (["1e30"] * 4 + ["-1e30"] * 5, "Bubo bubo,25,N," + ",".join(["999999"] * 4 + ["-999999"] * 5))]:
+yn = lambda pct: "Y" if pct >= CONF else "N"
+for lg, want in [(["nan"] * N, f"{NAMES[0]},0,N," + ",".join(["0"] * N)),
+                 (["inf"] + ["0"] * (N - 1), f"{NAMES[0]},0,N,999999," + ",".join(["0"] * (N - 1))),
+                 (["-1e30"] * N, f"{NAMES[0]},{int(100 / N + 0.5)},{yn(int(100 / N + 0.5))}," + ",".join(["-999999"] * N)),
+                 (["1e30"] * 2 + ["-1e30"] * (N - 2), f"{NAMES[0]},50,{yn(50)}," + ",".join(["999999"] * 2 + ["-999999"] * (N - 2)))]:
     cases.append("log 1792566000 " + " ".join(lg) + "\n"); expect.append("2026-10-21 07:00:00," + want + "\n")
 for bad in ["2026-02-30 07:00:00", "2026-04-31 07:00:00", "2027-02-29 07:00:00", "2026-10-21 06:58:309", "2026-10-21 06:58:30x", "2026-13-01 00:00:00", "2026-10-21T06:00:00", "abc", "2026-10-21 25:00:00", "APPLIED 2026-10-21 06:58:30"]:
     cases.append(f"parse {bad}\n"); expect.append("ERR\n")

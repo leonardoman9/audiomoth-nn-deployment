@@ -2,9 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "schedule.h"
-/* Reads cases from stdin: "parse <text>" | "fmt <secs>" | "win <secs>" | "log <secs> <9 logits>" and prints results. */
+/* Reads cases from stdin: "parse <text>" | "fmt <secs>" | "win <secs>" | "log <secs> <SCHED_CLASSES logits>" and prints results. */
 int main(void) {
-  char line[256];
+  char line[16 * SCHED_CLASSES + 256];  /* "log <secs>" + one "%f" per class */
   while (fgets(line, sizeof line, stdin)) {
     if (!strncmp(line, "parse ", 6)) {
       uint32_t s;
@@ -20,8 +20,8 @@ int main(void) {
     } else if (!strncmp(line, "log ", 4)) {
       char* p = line + 4;
       uint32_t s = (uint32_t)strtoul(p, &p, 10);
-      float lg[9];
-      for (int i = 0; i < 9; ++i) lg[i] = strtof(p, &p);
+      float lg[SCHED_CLASSES];
+      for (int i = 0; i < SCHED_CLASSES; ++i) lg[i] = strtof(p, &p);
       char out[SCHED_LOG_LINE_MAX];
       uint32_t n = Sched_FormatLogLine(out, s, lg);
       if (n >= SCHED_LOG_LINE_MAX) { printf("TOO LONG %u\n", n); continue; }

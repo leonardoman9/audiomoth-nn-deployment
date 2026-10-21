@@ -1,4 +1,4 @@
-// Whole bird classifier: PCM in, 9 logits out.
+// Whole classifier: PCM in, NNB_CLASSES logits out.
 //   Push 16-bit PCM @ 32 kHz as it arrives -> BirdFE (C) -> int8 backbone (TFLM) -> tail (C).
 #ifndef BIRD_PIPELINE_H
 #define BIRD_PIPELINE_H

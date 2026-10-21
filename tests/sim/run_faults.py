@@ -1,13 +1,20 @@
 """Fault-injection scenarios for the bird logger simulator (see SIM_FAULT in hal_sim.c).
-Usage: python run_faults.py SIM_BINARY AUDIO.raw WORKDIR
-Each scenario starts from a fresh SD card with CONFIG.TXT = 06:58:30, runs boots (one process = one power cycle)
-until the simulated clock passes 07:06 or a boot limit is hit, and checks what the firmware did."""
-import datetime, math, os, shutil, subprocess, sys
+Usage: [MODEL_PKG=dir] python run_faults.py SIM_BINARY AUDIO.raw WORKDIR
+Each scenario starts from a fresh SD card with CONFIG.TXT = 90 s before the package's daily window, runs boots (one
+process = one power cycle) until the clock passes the end of the window or a boot limit is hit, and checks what the
+firmware did."""
+import datetime, json, math, os, shutil, subprocess, sys
 from pathlib import Path
 
 binary, audio, root = sys.argv[1], sys.argv[2], Path(sys.argv[3])
-START = datetime.datetime(2026, 10, 21, 6, 58, 30)
-END_S = int((datetime.datetime(2026, 10, 21, 7, 6) - datetime.datetime(1970, 1, 1)).total_seconds())
+# classes and window of the model package: MODEL_PKG, default firmware/bird/model
+CFG = json.load(open(Path(os.environ.get("MODEL_PKG") or Path(__file__).resolve().parents[2] / "firmware/bird/model") / "model_config.json"))
+DAY = datetime.datetime(2026, 10, 21)
+START = DAY + datetime.timedelta(seconds=CFG["window_start_s"] - 90)  # clock set 90 s before the window
+END_S = int((DAY - datetime.datetime(1970, 1, 1)).total_seconds()) + CFG["window_start_s"] + CFG["window_length_s"] + 60
+FIELDS = 4 + CFG["classes"]
+WINDOWS = CFG["window_length_s"] // 6        # ~one window every 6 s in the simulator
+MIN_LINES = int(0.8 * WINDOWS)
 
 
 class Run:
@@ -56,14 +63,14 @@ def well_formed(lines):
     for l in lines:
         f = l.split(",")
         if l.startswith("REPLAY,"): f = f[1:]
-        if len(f) != 13 or f[3] not in "YN" or not (0 <= int(f[2]) <= 100): return False
+        if len(f) != FIELDS or f[3] not in "YN" or not (0 <= int(f[2]) <= 100): return False
         if any(abs(int(x)) >= 999999 for x in f[4:]): return False  # clamped value = broken logit
     return True
 
 # 0. reference: no fault
 r = Run("ok"); r.until_end()
 base = r.log()
-check("no fault", len(base) >= 40 and well_formed(base), f"{len(base)} lines, boots {r.boots}")
+check("no fault", len(base) >= MIN_LINES and well_formed(base), f"{len(base)} lines, boots {r.boots}")
 
 # 1. no SD card from the start: no clock, retry every 60 s, never crash
 r = Run("nosd_start"); [r.boot("nosd") for _ in range(5)]
@@ -80,22 +87,22 @@ check("no external SRAM", r.log() == [] and r.boots <= 4 and r.sleeps[-1] > 3600
 # 4. every SD write fails / LOG.TXT cannot be opened: windows still classified, red blinks, session ends normally
 for fault in ["writefail", "appendfail"]:
     r = Run(fault); r.boot(); r.until_end(fault)
-    check(f"SD {fault}", r.log() == [] and r.red >= 2 * 40 and r.sleeps[-1] > 3600, f"boots {r.boots}, red blinks {r.red}")
+    check(f"SD {fault}", r.log() == [] and r.red >= 2 * MIN_LINES and r.sleeps[-1] > 3600, f"boots {r.boots}, red blinks {r.red}")
 
 # 5. classification fails: no lines, session continues to the end of the window
 r = Run("pipefail"); r.until_end("pipefail")
-check("classification fails", r.log() == [] and r.red >= 3 * 40 and r.sleeps[-1] > 3600, f"boots {r.boots}, red {r.red}")
+check("classification fails", r.log() == [] and r.red >= 3 * MIN_LINES and r.sleeps[-1] > 3600, f"boots {r.boots}, red {r.red}")
 
 # 6. watchdog-style reset in the middle of the session: clock survives, logging resumes in the same window
-r = Run("reset"); r.boot()  # first boot sets the clock and sleeps until 07:00; the next boot runs the whole session
+r = Run("reset"); r.boot()  # first boot sets the clock and sleeps until the window; the next boot runs the whole session
 r.boot("reset=60000"); r.until_end()
 lines = r.log()
-check("reset mid-session", "RESET" in r.events and len(lines) >= 35 and well_formed(lines),
+check("reset mid-session", "RESET" in r.events and len(lines) >= int(0.7 * WINDOWS) and well_formed(lines),
       f"{len(lines)} lines (no fault: {len(base)}), events {r.events}")
 
 # 7. power cut in the middle of the session: lines written before the cut survive intact; the clock is lost, and
 #    CONFIG.TXT is already marked APPLIED, so the device waits (60 s retries) for a new CONFIG.TXT
-r = Run("powercut"); r.boot()  # first boot sets the clock and sleeps until 07:00; the next boot runs the whole session
+r = Run("powercut"); r.boot()  # first boot sets the clock and sleeps until the window; the next boot runs the whole session
 r.boot("powercut=60000"); before = r.log()
 for _ in range(3): r.boot()
 check("power cut mid-session", "POWER_CUT" in r.events and len(before) >= 5 and well_formed(before) and r.log() == before
@@ -115,14 +122,14 @@ check("no CONFIG.TXT", r.clock() is None and r.sleeps == [60, 60], f"sleeps {r.s
 for name, data in [("short", b"RPLY" + b"\0" * 1000), ("badhead", b"XXXX" + b"\0" * 192000 + b"END!"), ("notail", b"RPLY" + b"\0" * 192000 + b"ENDX")]:
     r = Run(f"replay_{name}", files={"REPLAY.PCM": data}); r.until_end()
     lines = r.log()
-    check(f"bad REPLAY.PCM ({name})", r.file("REPLAY.PCM") == b"x" and not any(l.startswith("REPLAY") for l in lines) and len(lines) >= 40,
+    check(f"bad REPLAY.PCM ({name})", r.file("REPLAY.PCM") == b"x" and not any(l.startswith("REPLAY") for l in lines) and len(lines) >= MIN_LINES,
           f"{len(lines)} lines, REPLAY.PCM now {r.file('REPLAY.PCM')!r}")
 
 # 10. silent microphone (all zeros): per-clip normalisation sees zero spread; lines must still be finite and well formed
 silent = root / "silence.raw"; silent.write_bytes(b"\0" * 32000 * 2 * 10)
 r = Run("silence", audio_file=str(silent)); r.until_end()
 lines = r.log()
-check("silent microphone", len(lines) >= 40 and well_formed(lines), f"{len(lines)} lines, first: {lines[0] if lines else None}")
+check("silent microphone", len(lines) >= MIN_LINES and well_formed(lines), f"{len(lines)} lines, first: {lines[0] if lines else None}")
 
 failed = [n for n, ok, _ in results if not ok]
 print(f"\n{len(results) - len(failed)}/{len(results)} scenarios passed" + (f"; FAILED: {failed}" if failed else ""))
