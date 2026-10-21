@@ -239,16 +239,22 @@ for name, text in [("garbage", b"\xff\x00CLS nonsense"), ("missing", b"CLS 20261
 
 # 15. a window that crashes the board (here: a power cut 1.5 s into it, while it is being classified). MAX_TRIES = 3
 #     boots may start it: crashing twice and then working logs every window; crashing three times skips that window
-#     at the 4th boot, which goes on with the rest
+#     at the 4th boot, which goes on with the rest. Which window the first cut hits, and whether its line was already
+#     written (the cut can fall between the line and the saved progress), depends on the model package's timing: both
+#     are read from the card after the first cut.
 crash_at = (WL + 2) + 10 * 3.3   # inside the 11th window or so
-for crashes, want in [(2, PER_DAY), (3, PER_DAY - 1)]:
+for crashes in (2, 3):
     r = Run(f"crash_window{crashes}"); r.boot()
     r.boot(f"powercut={int(crash_at * 1000)}")
+    k = int(r.state().split()[4])  # CLS path start samples NEXT gaps tries: the window being classified at the cut
+    logged = set(times(r.log()))
     for _ in range(crashes - 1): r.boot("powercut=1500")  # every resume dies 1.5 s in, on the same window
     r.boot()
     t = times(r.log())
-    check(f"window crashing {crashes} times", r.state() == "DONE" and len(set(t)) == want and len(t) - len(set(t)) <= 1 and r.sleeps[-1] == 60,
-          f"{len(set(t))} of {PER_DAY} windows logged (expected {want}), red {r.red}")
+    skipped = crashes == 3 and EXPECTED_TIMES[k] not in logged
+    want = set(EXPECTED_TIMES) - ({EXPECTED_TIMES[k]} if skipped else set())
+    check(f"window crashing {crashes} times", r.state() == "DONE" and set(t) == want and len(t) - len(set(t)) <= 1 and r.sleeps[-1] == 60,
+          f"{len(set(t))} of {PER_DAY} windows logged (expected {len(want)}; window {k} {'skipped' if skipped else 'kept'}), red {r.red}")
 
 # 15b. a pending session whose recording cannot be opened (here its path is a folder): abandoned after MAX_TRIES boots
 #      with a summary line, so it cannot block the next sessions; the same for a pending REC
