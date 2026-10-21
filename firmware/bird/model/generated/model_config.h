@@ -8,5 +8,6 @@
 #define MODEL_NEGATIVE_CLASS 8  /* "nothing of interest" class, -1 if none */
 #define APP_WINDOW_START_S   25200u
 #define APP_WINDOW_LENGTH_S  300u
+#define APP_WINDOW_HOP_SAMPLES 96000u  /* step between classified windows of the recording */
 #define APP_CONFIDENCE_PCT   50
 #endif

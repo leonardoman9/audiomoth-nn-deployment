@@ -21,16 +21,13 @@ while boots < limit_boots:
         elif "POWER_DOWN" in line: powerdowns.append(int(line.split("wake_after=")[1]))
     if r.returncode != 0:
         print("boot", boots, "exit code", r.returncode, r.stderr[-300:]); break
-    state = (work / "rtc.state").read_text().split()
-    simulated_days = (int(state[0]) / 1000 - 1792540800) / 86400 if False else None
-    logf = work / "sd" / "LOG.TXT"
-    if logf.exists():
-        lines = logf.read_text().splitlines()
-        first_day = lines[0][:10]
-        # stop once we have logged `days` different calendar days
-        if len({l[:10] for l in lines}) >= days and (int(state[0]) // 1000) % 86400 > 7 * 3600 + 400: break
+    # stop once `days` calendar days are logged and the last session is complete (the device went to sleep with
+    # nothing pending: STATE.TXT says DONE and the last power-down is a long one, i.e. until the next window)
+    logf, statef = work / "sd" / "LOG.TXT", work / "sd" / "STATE.TXT"
+    if logf.exists() and statef.exists() and statef.read_text().startswith("DONE") and powerdowns and powerdowns[-1] >= 3600:
+        if len({l[:10] for l in logf.read_text().splitlines()}) >= days: break
 lines = (work / "sd" / "LOG.TXT").read_text().splitlines() if (work / "sd" / "LOG.TXT").exists() else []
 print(f"boots={boots} log lines={len(lines)} LED={leds} sleeps={len(powerdowns)} (first {powerdowns[:3]}, last {powerdowns[-2:]})")
-print("sd files:", sorted(p.name for p in (work / 'sd').iterdir()))
+print("sd files:", sorted(str(p.relative_to(work / "sd")) for p in (work / "sd").rglob("*") if p.is_file()))
 print("first lines:"); print("\n".join(lines[:4]))
 print("last lines:"); print("\n".join(lines[-2:]))

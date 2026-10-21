@@ -8,8 +8,10 @@ microphone -> ADC 384 kHz -> decimation to 32 kHz -> C front-end (STFT + 64 lear
            -> int8 CNN backbone (TFLM + CMSIS-NN) -> GRU + attention + FC in C -> 9 logits -> LOG.TXT on microSD
 ```
 
-Every day at **07:00** (board clock) it classifies about **5 minutes** of audio in 3 s windows and appends one line per
-window to `LOG.TXT`. The rest of the time the board sleeps (EM4). It does not use USB, GPS or the configuration app.
+Every day at **07:00** (board clock) it records the whole **5-minute** window to the microSD card, then classifies the
+recording in 3 s windows and appends one line per window to `LOG.TXT`. Every second of the window is classified, and
+the audio stays on the card so the results can be checked by ear or re-analysed later. The rest of the time the board
+sleeps (EM4). It does not use USB, GPS or the configuration app.
 
 > **Status.** Verified in emulation only: host simulator, Cortex-M4 in QEMU, FatFS on a FAT32 image.
 > **It has not yet run on a real board.** Timing and energy figures are estimates. Full results in
@@ -17,9 +19,9 @@ window to `LOG.TXT`. The rest of the time the board sleeps (EM4). It does not us
 
 | | |
 |---|---|
-| Flash | 230,380 B of 245,760 (~15 KB margin) |
-| Internal RAM | .data 192 B + .bss 14,112 B, stack ~2.7 KB |
-| External SRAM | ~160 KB (96 KiB TFLM arena + buffers) |
+| Flash | 233,476 B of 245,760 (~12 KB margin) |
+| Internal RAM | .data 192 B + .bss 16,160 B, stack ~2.7 KB |
+| External SRAM | 258,512 B of 262,144 (96 KiB TFLM arena, front-end, 1.5 s recording ring) |
 | Model | int8 backbone 94.7 KB, 151 operators; tail (GRU 64) in C with int8 weights |
 | Accuracy (8 species, 161 windows) | float 76.4 %, device pipeline 75.8 % |
 
@@ -56,7 +58,7 @@ firmware/app/build_app.sh third_party/tflite-micro firmware/bird/model
 ```
 
 The output is `firmware/app/out/bird_logger.bin`, together with `bird_logger.axf`. The script prints the size:
-`flash image: 230380 bytes (limit 245760)`. The flags in `build_tflm.sh` (kernels at `-Os`) are required: without them the
+`flash image: 233476 bytes (limit 245760)`. The flags in `build_tflm.sh` (kernels at `-Os`) are required: without them the
 firmware exceeds 244 KB.
 
 The **diagnostic firmware** records WAV files instead of classifying. Use it to check the microphone on a real board:
@@ -70,18 +72,19 @@ EXTRA_CF=-DBIRD_DIAG_RECORD firmware/app/build_app.sh third_party/tflite-micro f
 The firmware takes the model from a **model package** folder: the int8 backbone, the generated C headers (learned
 filterbank, tail weights, `model_config.h`) and `model_config.json`. The layout and the generator of each file are in
 [firmware/bird/model/README.md](firmware/bird/model/README.md). The architecture is fixed (WrenNet: 32 kHz, 3 s
-windows); the number of classes, their names, the "nothing of interest" class, the daily window and the confidence
-threshold come from the package:
+windows); the number of classes, their names, the "nothing of interest" class, the daily window, the step between classified
+windows (hop; 1.5 s = half overlap, twice the windows and the classification time) and the confidence threshold come
+from the package:
 
 ```sh
 python3 firmware/bird/gen_model_config.py path/to/package --names "Species A,Species B,background" \
-    --window-start 05:30 --window-minutes 10 --confidence 60
+    --window-start 05:30 --window-minutes 10 --hop-seconds 1.5 --confidence 60
 firmware/app/build_app.sh third_party/tflite-micro path/to/package
 ```
 
 Each class costs ~88 B of flash, so up to **~180 classes** fit; beyond that the link fails with "FLASH memory
 overflowed". `tests/make_test_package.py` makes packages with any number of classes (meaningless weights) to test the
-firmware; CI runs every test with the default model and with 3- and 40-class packages.
+firmware; CI runs every test with the default model, with 3- and 40-class packages and with a 1.5 s hop.
 
 ## Using the board
 
@@ -89,14 +92,38 @@ firmware; CI runs every test with the default model and with 3- and 40-class pac
 2. Create `CONFIG.TXT` on the microSD card to set the clock (see below).
 3. Insert the card and power on. At boot the clock is set and `CONFIG.TXT` is rewritten as `APPLIED <time>`, so it is not
    applied again.
-4. From 07:00 to 07:05 the firmware writes one line about every 6 s to `LOG.TXT`:
+4. From 07:00 to 07:05 the board records to `20261021/070000.WAV` (one folder per day). Then it classifies the
+   recording, which takes several minutes (estimate: 6–8 s per 3 s window, to be measured on the board), and writes one
+   line per window to `LOG.TXT`. The time on each line is the time of that window in the recording:
 
    ```
    2026-10-21 07:00:09,Bubo bubo,69,Y,241,-87,-15,-19,-65,-56,-37,-39,-79
    time, most likely class, probability %, Y if >= 50 %, 9 logits x100
    ```
 
-Start time and duration are set in `firmware/app/schedule.h` (`SCHED_WINDOW_*`).
+Start time, duration, the step between windows (hop) and the confidence threshold come from the model package
+(`gen_model_config.py`, see "Other models").
+
+To update the firmware on a deployed board, flash it when `STATE.TXT` says `DONE` (or on a fresh card): a pending
+session left by an older firmware version is not resumed.
+
+### What is on the card
+
+| file | content |
+|---|---|
+| `CONFIG.TXT` | the clock to set (you write it; see below); `APPLIED ...` once used |
+| `YYYYMMDD/HHMMSS.WAV` | the recording of each session: 32 kHz, mono, 16 bit, ~19 MB for 5 minutes (~3.5 GB in 6 months) |
+| `LOG.TXT` | one line per classified window |
+| `SESSIONS.TXT` | one line per session: start, recording, seconds recorded, samples lost to SD stalls, windows, classification seconds |
+| `STATE.TXT` | progress of the current session (`REC`, `CLS`, `DONE`), a fixed 96-byte record rewritten in place: after a reset or a power cut the board resumes from here |
+| `REPLAY.PCM` | optional, for the replay test (below) |
+
+If the card cannot keep up, or a write fails (the SD driver gives up on a card busy for more than 500 ms; a full
+card), the lost audio is written as silence and counted in `SESSIONS.TXT`, so the timeline of the recording stays exact.
+After a reset or a power cut the recording keeps what was saved up to ~2.6 s before it, and the next boot classifies it
+(and any unfinished classification) even without a clock: every reset other than a wake-up from sleep clears the
+clock (that is how the AudioMoth library works), so a new `CONFIG.TXT` is needed afterwards for the next sessions.
+The board wakes 2 s before the window to create the file, so the recording starts exactly on the window's first second.
 
 ### CONFIG.TXT (setting the clock)
 
@@ -141,17 +168,21 @@ TFLM library: `HOST=1 scripts/build_tflm.sh`.
 ```sh
 T=third_party/tflite-micro; M=firmware/bird/model    # or another model package; the Python tests read MODEL_PKG
 
-# schedule and log logic: 1,816 cases checked against Python's datetime
+# schedule, log, recording file names, WAV header, STATE.TXT and SESSIONS.TXT logic: 3,228 cases checked against Python
 cc -Ifirmware/app -I$M/generated firmware/app/schedule.c tests/schedule/test_schedule.c -lm -o /tmp/ts && python3 tests/schedule/test_schedule.py /tmp/ts
 
 # simulator: main_app.c and the real pipeline on a software model of the board, over several simulated days
 tests/sim/build_sim.sh $T $M
 python3 tests/sim/make_test_audio.py audio.raw 60      # synthetic audio; or make_audio.py from real recordings
 python3 tests/sim/run_scenario.py tests/sim/out/bird_logger_sim audio.raw /tmp/work 2
-python3 tests/sim/check_long_run.py /tmp/work 2026-10-21 2
+python3 tests/sim/check_long_run.py /tmp/work 2026-10-21 2   # every window of every day, sessions, recordings
+python3 tests/sim/check_recording.py audio.raw /tmp/work/sd  # the recordings are the microphone input
 python3 tests/sim/verify_log.py /path/to/WrenNet best_distillation_model.pt /tmp/work    # comparison with PyTorch
 
-# fault injection (no SD, no SRAM, failed writes, power cut, reset, bad CONFIG.TXT / REPLAY.PCM, silence): 21 scenarios
+# fault injection: no SD, no SRAM, failed writes, SD stalls and slow cards, reset and power cut during the recording
+# and during the classification (and 25 cut times), a full card, a window that always crashes, an unreadable pending
+# recording, a late start, bad CONFIG.TXT / STATE.TXT / REPLAY.PCM, silence, little time left: 44 scenarios.
+# Everything at once (what CI runs): scripts/run_tests.sh $T $M
 SAN=1 OUTSUFFIX=_san tests/sim/build_sim.sh $T $M      # with AddressSanitizer + UBSan
 python3 tests/sim/run_faults.py tests/sim/out_san/bird_logger_sim audio.raw /tmp/faults
 
@@ -181,9 +212,13 @@ benchmarks/       Raspberry Pi benchmarks (earlier work; audio-model-int8.tflite
 
 ## Known limitations
 
-- Never run on hardware. Still to be tested: enabling the external SRAM, the SD driver (SPI), real microphone levels,
-  timing (estimate: ~6–8 s of compute per window) and energy (estimate: ~0.8–1 J per window). The estimates can be off
-  by about 2×.
+- After any reset that is not a wake-up from sleep (watchdog, brown-out, power cut) the library clears the clock, and
+  sessions stop until a new `CONFIG.TXT` (pending work is still finished; files written without a clock show the year
+  2098 on a computer). Keeping the clock across a watchdog reset
+  would need a change in the AudioMoth library, to be tested on the board.
+- Never run on hardware. Still to be tested: enabling the external SRAM, the SD driver (SPI) and its write speed while
+  recording, real microphone levels, timing (estimate: ~6–8 s of compute per window, so ~10–13 minutes awake for a
+  5-minute window) and energy. The estimates can be off by about 2×.
 - The model was trained on clips centred on calls; here fixed 3 s windows are used, so accuracy in the field may be lower.
   There is no false-positive mitigation yet.
 

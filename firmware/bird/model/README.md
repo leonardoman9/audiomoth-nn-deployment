@@ -6,7 +6,7 @@ learned filters, int8 CNN backbone, GRU 64 + attention); a package can have any 
 ```
 <package>/
   *.tflite                     int8 backbone (input [1,1,301,64], output [1,1,301,32]); exactly one file
-  model_config.json            classes, names, negative class, daily window (read by the tests and tools)
+  model_config.json            classes, names, negative class, daily window, hop, threshold (read by the tests and tools)
   generated/
     model_config.h             the same, for the firmware   (firmware/bird/gen_model_config.py)
     bird_frontend_tables.h     learned filterbank tables    (tools/gen_frontend_tables.c)

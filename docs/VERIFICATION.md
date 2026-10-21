@@ -34,10 +34,10 @@ These are estimates, not measurements.
 
 ## 4. Stack and internal RAM
 Maximum stack measured in QEMU over the whole pipeline: **2,708 B** (2.7 KB); pipeline statics 7,024 B. Full application:
-`.data` 192 + `.bss` 14,112 B (+ 3 KB reserved heap). Wide margin on 32 KB.
+`.data` 192 + `.bss` 16,160 B (+ 3 KB reserved heap; 14,112 B before the recorder of section 13). Wide margin on 32 KB.
 
 ## 5. Flash
-Complete firmware (application + classifier): **230,380 B of 245,760** (15.0 KB margin; 230,124 B before the log-line and CONFIG.TXT hardening of section 12). TFLM+CMSIS-NN 53.6 KB (size build,
+Complete firmware (application + classifier): **233,476 B of 245,760** (12.0 KB margin; 230,124 B before the hardening of section 12 and the recorder of section 13). TFLM+CMSIS-NN 53.6 KB (size build,
 no-int4 patch in `firmware/patches/`), model 94.7 KB, tail 27.5 KB, front-end tables ~10 KB. The original AudioMoth linker
 script compares a LENGTH with an ADDRESS (`__etext`), which makes it 16 KB stricter than the physical limit; fixed in our copy
 (`firmware/audiomoth_tflm.ld`). The rest of the firmware (FatFS, audiomoth.c, emlib, filters) is ~36 KB (diagnostic build
@@ -126,7 +126,110 @@ equivalent (-100 B). An earlier version of this section compared 10.3 without th
   in order, 48 or 49 lines per day, all inside 07:00–07:05, no broken values, no red LED. LOG.TXT grows by ~3.5 KB per
   day (1.41 MB after 400 days; FAT32 allows 4 GB).
 
-## 13. Still open (needs the board or more data)
+## 13. Record the whole window, then classify it
+The window used to be classified while recording: 3 s heard, then 6–8 s of computation with the microphone data
+dropped, so only ~30 % of the window was heard. Now the whole window is recorded to the card (`YYYYMMDD/HHMMSS.WAV`),
+then read back and classified window by window (hop from the model package, 1–3 s). Progress is kept in `STATE.TXT`;
+`SESSIONS.TXT` gets one summary line per session.
+
+**How it works**
+- **Recording.** The DMA handler writes into a 1.5 s ring (96 KB of external SRAM). The main loop copies 4 KB chunks
+  to internal RAM and writes them to the card, syncing every 40 chunks (~2.6 s). The WAV header is padded to 512 B, so
+  the writes are sector-aligned.
+- **Card problems.** If the card falls more than the ring behind, or a write fails (busy > 500 ms, card full), the file
+  is reopened, the lost stretch is written as silence and counted, and the timeline stays exact.
+- **Timing.** The board wakes 2 s before the window and starts on a whole second, so the file name and every
+  `LOG.TXT` time are the sample times.
+- **Resume.** A reset or power cut is resumed at the next boot even without a clock, which any non-EM4 reset clears
+  (audiomoth.c). `STATE.TXT` is a fixed 96 B record rewritten in place. A window started by 3 boots without finishing
+  is skipped, and a pending session that cannot be classified at all for 3 boots is abandoned. No new session starts
+  while one is pending.
+
+**Review** (an independent agent read the code and ran its own experiments, including on the real FatFS). It found
+problems the first version's tests did not:
+1. **Resets lost the clock, so the resume never ran.** On the board, any reset other than an EM4 wake clears the
+   clock (watchdog, brown-out, lockup, power cut). The resume sat behind the clock check, so it never ran. The
+   simulator had kept the clock on `reset=`, hiding this.
+2. **A cut while saving the state abandoned the session.** `STATE.TXT` was rewritten with `FA_CREATE_ALWAYS`, which
+   truncates at once, so a cut between the open and the write left it empty. Shown in the simulator and on FatFS.
+3. **A write failure overcounted the samples.** The header lied and the last window was classified partly from stale
+   buffer data (short reads return FR_OK).
+4. **A single long stall aborted the recording.** The SD driver fails any write that waits over 500 ms, and the file
+   object stays in error; the simulator had modelled a long stall as a slow write that succeeds.
+5. **Gaps were overcounted.** The silence skip threw away ~0.3 s of intact audio at each overflow.
+6. **Times were up to ~2 s early**, and hops under 1 s repeated timestamps.
+7. **Configuration limits were missing.** Very long windows overflowed 32-bit sizes, and classification could
+   overlap the next window.
+
+All fixed. **A second review of the fixes** found three more problems, also fixed:
+1. `scripts/run_tests.sh` used `cmd | tail` under plain `sh` (no pipefail), so CI could have passed with failing
+   fault scenarios.
+2. A crashing window was attempted 4 times instead of 3.
+3. A pending recording that could never be opened blocked every new session for weeks.
+
+It also found that a start delayed by a slow card left the planned time in the file name. Now the missed seconds are
+written as silence, so names and times stay exact. The classification margin in `gen_model_config` is 12 s per
+window.
+
+The simulator now behaves like the library and FatFS:
+- **Resets** lose the clock.
+- **Failed writes** leave half their bytes on the card, and the error sticks until the file is reopened.
+- **Stalls** longer than 500 ms fail.
+- **New faults:** `wfail` makes one write fail; `diskfull` fills the card.
+- **Opening a second file** stops the run.
+- **Opening a folder as a file** fails.
+- **File opens** can be made slow (`SIM_SD_OPEN_MS`).
+
+**Results** (simulator with ASan+UBSan unless stated)
+- **Content.** The 300 s recording equals the microphone input over its whole length (relative error 0.026 above
+  300 Hz, the 12-bit quantisation alone; `tests/sim/check_recording.py`). Every classified window is exactly the
+  matching slice of the WAV. Device vs PyTorch on those windows: 95/100 same class; the 5 differences all have
+  PyTorch confidence ≤ 0.33.
+- **FatFS** (`tests/fstest/`, ASan/UBSan). It runs the same sequence:
+  - a folder, then 300 s in 4 KB writes with syncs;
+  - the header rewrite, `getFileSize`, and read-back by seek with every sample checked;
+  - the state rewritten in place: a cut during that rewrite (open + seek + partial write, unmount without close)
+    keeps the old record;
+  - a read past the end of a file returns FR_OK with nothing read.
+
+  mtools reads a valid 19,200,512-byte WAV.
+- **Fault injection: 44 scenarios, all PASS** (`tests/sim/run_faults.py`). Among them:
+  - **SD busy:** 400 ms loses nothing; 3 s loses 0.03 s (the write fails after 500 ms, the ring covers the rest).
+  - **One write failing mid-recording:** same recovery.
+  - **Full card:** recording stops at the limit with a correct header; only windows in the file are classified, none
+    from stale data.
+  - **Slow cards:** 50 ms per write loses nothing; 80 ms (slower than real time) keeps the file length.
+  - **Reset and power cut:** during the recording, the next boot classifies the synced part without a clock. During
+    the classification, it resumes.
+  - **Power cuts at 25 times** across the recording and classification, including inside the state saves: every
+    window logged once, at most one repeated.
+  - **Bad state:** corrupt, empty, out-of-range or orphaned `STATE.TXT`.
+  - **A window that crashes the board:** after 2 crashes the 3rd try logs it; after 3 crashes it is skipped.
+  - **An unreadable pending recording** (`CLS` or `REC`): abandoned at the 3rd boot, then the session runs.
+  - **A slow card delaying the start by 2 s:** the missed seconds become silence, and the times stay exact.
+  - **Little time left:** boots with 5, 4 and 3 s left.
+  - **Replay then session** in the same boot.
+  - **The earlier scenarios.**
+- **Long run.** 62 simulated days from 2027-12-30 (new year, leap day): **PASS**, 100 windows every day, 62 complete
+  sessions, 0 samples lost, ~19 MB per day (~3.5 GB in 6 months). This was before the review fixes; the 2-day runs
+  and the fault scenarios cover the fixed version.
+- **Other packages:** every test also passes with 3 classes (13:30, 10 min), 40 classes (23:50, 8 min, so the
+  classification runs past midnight) and a 1.5 s hop (199 windows per session), in CI as well.
+- **Earlier bugs found while doing this:**
+  1. `NNBird_Init` failed the second time in one boot (TFLM refuses to register an operator twice), so a replay
+     followed by a session lost the session.
+  2. A processed `REPLAY.PCM` (1 byte) made the board blink 6 times at every boot.
+  3. In the simulator: `readFile` failed on short reads, which FatFS does not do, and wake-ups ignored the
+     whole-second alignment of `powerDownAndWake(s, true)`.
+- **Cost.** Flash 233,476 B (+3.1 KB); external SRAM 258,512 of 262,144 B; internal `.bss` 16,160 B. Time awake per day:
+  5 min of recording + the classification (estimate 6–8 s × 100 windows ≈ 10–13 min).
+- **Still to measure on the board:**
+  - the card's write speed and stalls while recording;
+  - the energy of the longer time awake;
+  - whether keeping the clock across a watchdog reset is possible by changing the library (today any such reset
+    stops the sessions until a new `CONFIG.TXT`).
+
+## 14. Still open (needs the board or more data)
 Boot and external SRAM enable on the chip; real DMA/ADC capture and levels; the real SD driver; real timing and power (the
 estimates above can be off by ~2×); true accuracy on the test set (the Drive dataset lacks the training's test split, and
 the `os.listdir` order is not reproducible); domain gap with real device audio.

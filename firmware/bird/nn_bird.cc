@@ -29,9 +29,16 @@ tflite::MicroInterpreter* g_interp = nullptr;
 extern "C" {
 
 bool NNBird_Init(void) {
-  // Exactly the operators of the 4-D backbone (no Reshape/Minimum/Relu any more).
-  if (g_resolver.AddAdd() || g_resolver.AddConv2D() || g_resolver.AddDepthwiseConv2D() || g_resolver.AddHardSwish() ||
-      g_resolver.AddLogistic() || g_resolver.AddMean() || g_resolver.AddMul() || g_resolver.AddPad()) return false;
+  // Exactly the operators of the 4-D backbone (no Reshape/Minimum/Relu any more). Registered once: adding an
+  // operator twice is an error, and Init runs more than once per boot (replay, resumed recording, session).
+  static bool ops_added = false;
+  if (!ops_added) {
+    if (g_resolver.AddAdd() || g_resolver.AddConv2D() || g_resolver.AddDepthwiseConv2D() || g_resolver.AddHardSwish() ||
+        g_resolver.AddLogistic() || g_resolver.AddMean() || g_resolver.AddMul() || g_resolver.AddPad()) return false;
+    ops_added = true;
+  }
+  // The interpreter is rebuilt every time: its state lives in the arena, which is lost whenever the external SRAM
+  // is powered off between uses. (No destructor call: it would read that state; the interpreter owns no heap memory.)
   if (!AudioMoth_enableExternalSRAM()) return false;
   const tflite::Model* model = tflite::GetModel(g_bird_model);
   if (model->version() != TFLITE_SCHEMA_VERSION) return false;
