@@ -67,7 +67,7 @@ EXTRA_CF=-DBIRD_DIAG_RECORD firmware/app/build_app.sh third_party/tflite-micro f
 ## Using the board
 
 1. Flash the `.bin` with the bootloader; the application starts at `0x4000`.
-2. On the microSD card, create `CONFIG.TXT` with a single line holding the current time: `2026-10-21 06:58:30`.
+2. Create `CONFIG.TXT` on the microSD card to set the clock (see below).
 3. Insert the card and power on. At boot the clock is set and `CONFIG.TXT` is rewritten as `APPLIED <time>`, so it is not
    applied again.
 4. From 07:00 to 07:05 the firmware writes one line about every 6 s to `LOG.TXT`:
@@ -77,8 +77,35 @@ EXTRA_CF=-DBIRD_DIAG_RECORD firmware/app/build_app.sh third_party/tflite-micro f
    time, most likely class, probability %, Y if >= 50 %, 9 logits x100
    ```
 
-If power is lost, the time is lost too and a new `CONFIG.TXT` is needed. Clock drift is ±0.9 s per day.
 Start time and duration are set in `firmware/app/schedule.h` (`SCHED_WINDOW_*`).
+
+### CONFIG.TXT (setting the clock)
+
+The board has no clock until it reads one from the card. The file is not in this repository: you create it.
+
+- **Where:** in the **root** of the microSD card (not in a folder), named `CONFIG.TXT` (FAT is case-insensitive, so
+  `config.txt` works too). The card must be FAT32.
+- **Format:** plain ASCII text, one line, `YYYY-MM-DD hh:mm:ss`, 24-hour clock:
+
+  ```
+  2026-10-21 06:58:30
+  ```
+
+  Spaces, tabs and a line ending (`\n` or `\r\n`) before or after the time are fine; anything else is rejected: other
+  characters after the seconds, `T` instead of the space, missing seconds, impossible dates such as `2026-02-30`, years
+  outside 2020–2100.
+- **Time zone:** the firmware uses the time exactly as written, without time zones or daylight saving. The daily window
+  is 07:00–07:05 *of that clock*: write local time if you want 07:00 local, but it will not follow summer/winter time
+  changes. If you write UTC, the window is 07:00 UTC.
+- **When it is read:** only at power-up when the board has no valid time: the first power-up, or after the batteries
+  were removed. The time is applied at the moment of boot, so write a time a few seconds ahead and power on when it
+  is reached. Accuracy is that of your timing (seconds).
+- **After it is read:** the file is overwritten with `APPLIED 2026-10-21 06:58:30`, so the same time is not applied again
+  at the next boot. To set the clock again, write a new time into the file and remove power so the board loses its time.
+- **If it is missing or invalid:** the board blinks red 3 times and retries every 60 s; it does nothing else until it
+  finds a valid file.
+
+If power is lost, the time is lost too and a new `CONFIG.TXT` is needed. Clock drift is ±0.9 s per day.
 
 **Replay mode.** If the card holds `REPLAY.PCM`, the firmware classifies that window instead of the microphone and writes
 a `REPLAY,...` line to the log. The file contains one known 3 s window and is prepared with `tests/sim/run_replay.py`.

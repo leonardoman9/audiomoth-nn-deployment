@@ -28,7 +28,8 @@ failure points to one cause. Tools are in `tools/board/`; the simulator (`tests/
 
 ## 1. Boot and SD card (diagnostic firmware)
 1. `EXTRA_CF=-DBIRD_DIAG_RECORD firmware/app/build_app.sh third_party/tflite-micro firmware/bird/model/bird_backbone_int8.tflite`
-2. Flash `firmware/app/out/bird_logger.bin`. On the card, put `CONFIG.TXT` with the current time (`2026-10-21 06:58:30`).
+2. Flash `firmware/app/out/bird_logger.bin`. In the root of the card, put `CONFIG.TXT` with the current time
+   (`2026-10-21 06:58:30`; format and rules in the README, section "CONFIG.TXT").
 3. Power on. Expected: 3 short green blinks over ~10 s, one per file. Three files `HHMMSS.WAV` appear on the card,
    and `CONFIG.TXT` now reads `APPLIED ...`.
 
