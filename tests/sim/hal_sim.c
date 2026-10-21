@@ -7,10 +7,16 @@
  * DigitalFilter (sum of 12, x16/12 gain, 48 Hz high-pass) gives back the original signal.
  * What it does NOT model: ADC/DMA timing jitter, analog front-end, real SD driver, RTC drift,
  * power consumption, clocks, external SRAM wait states.
+ *
+ * SIM_FAULT (comma-separated) injects failures for this boot: nosd (file system never mounts), nosram (external
+ * SRAM does not enable), writefail (every SD write fails), appendfail (LOG.TXT cannot be opened), pipefail
+ * (classification fails), powercut=MS (power lost MS ms after boot: the clock is lost, unflushed data too),
+ * reset=MS (watchdog-style reset MS ms after boot: the clock survives).
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "audiomoth.h"
 
@@ -28,6 +34,9 @@ static double ms_residual;
 static FILE *file;
 static int window_index;
 static FILE *window_pcm;
+static bool f_nosd, f_nosram, f_writefail, f_appendfail, f_pipefail;
+static long f_powercut_ms = -1, f_reset_ms = -1;
+static uint64_t boot_ms;
 
 static void Path(char *out, const char *sub, const char *name) { snprintf(out, 1024, "%s/%s%s%s", dir, sub, sub[0] ? "/" : "", name); }
 
@@ -59,6 +68,31 @@ __attribute__((constructor)) static void SimInit(void) {
     }
     const char *w = getenv("SIM_WINDOW_INDEX");
     window_index = w ? atoi(w) : 0;
+    const char *fault = getenv("SIM_FAULT");
+    if (fault) {
+        f_nosd = strstr(fault, "nosd") != NULL; f_nosram = strstr(fault, "nosram") != NULL;
+        f_writefail = strstr(fault, "writefail") != NULL; f_appendfail = strstr(fault, "appendfail") != NULL;
+        f_pipefail = strstr(fault, "pipefail") != NULL;
+        const char *c = strstr(fault, "powercut="); if (c) f_powercut_ms = atol(c + 9);
+        const char *r = strstr(fault, "reset="); if (r) f_reset_ms = atol(r + 6);
+    }
+    boot_ms = now_ms;
+}
+
+/* Power cut or reset at a given time after boot. _exit() drops buffered, unclosed file data, as a real cut would. */
+static void CheckCut(void) {
+    if (f_powercut_ms >= 0 && now_ms - boot_ms >= (uint64_t)f_powercut_ms) {
+        char p[1024];
+        Path(p, "", "rtc.state");
+        remove(p);  /* datasheet: the time is lost when power is lost */
+        printf("SIM: POWER_CUT\n"); fflush(stdout);
+        _exit(0);
+    }
+    if (f_reset_ms >= 0 && now_ms - boot_ms >= (uint64_t)f_reset_ms) {
+        SaveState();
+        printf("SIM: RESET\n"); fflush(stdout);
+        _exit(0);
+    }
 }
 
 /* Delivers the DMA transfers that fall inside the elapsed time. */
@@ -68,6 +102,7 @@ static void Advance(uint64_t ms_total_x1000) {
     while (ms_residual >= transfer_ms) {
         ms_residual -= transfer_ms;
         now_ms += 2;
+        CheckCut();
         if (mic_on && dma_primary && dma_secondary) {
             int16_t *buf = dma_next_is_primary ? dma_primary : dma_secondary;
             for (uint32_t i = 0; i < RAW_PER_TRANSFER / 12; ++i) {
@@ -85,7 +120,7 @@ static void AdvanceMs(uint32_t ms) { Advance((uint64_t)ms * 1000u); }
 void AudioMoth_initialise(void) {}
 bool AudioMoth_isInitialPowerUp(void) { return initial_power_up; }
 bool AudioMoth_hasInvertedOutput(void) { return false; }
-bool AudioMoth_enableExternalSRAM(void) { return true; }
+bool AudioMoth_enableExternalSRAM(void) { return !f_nosram; }
 void AudioMoth_disableExternalSRAM(void) {}
 bool AudioMoth_hasTimeBeenSet(void) { return time_set; }
 void AudioMoth_setTime(uint32_t t, uint32_t ms) { now_ms = (uint64_t)t * 1000u + ms; time_set = true; ms_residual = 0; SaveState(); }
@@ -110,13 +145,13 @@ void AudioMoth_disableMicrophone(void) { mic_on = false; }
 void AudioMoth_initialiseDirectMemoryAccess(int16_t *p, int16_t *s, uint16_t n) { dma_primary = p; dma_secondary = s; (void)n; }
 void AudioMoth_startMicrophoneSamples(uint32_t rate) { (void)rate; mic_on = true; dma_next_is_primary = true; }
 
-bool AudioMoth_enableFileSystem(AM_sdCardSpeed_t s) { (void)s; return true; }
+bool AudioMoth_enableFileSystem(AM_sdCardSpeed_t s) { (void)s; return !f_nosd; }
 void AudioMoth_disableFileSystem(void) {}
 bool AudioMoth_doesFileExist(char *name) { char p[1024]; Path(p, "sd", name); FILE *f = fopen(p, "rb"); if (f) fclose(f); return f != NULL; }
 bool AudioMoth_openFileToRead(char *name) { char p[1024]; Path(p, "sd", name); file = fopen(p, "rb"); return file != NULL; }
 bool AudioMoth_readFile(char *buf, uint32_t size) { return file && fread(buf, 1, size, file) > 0; }
-bool AudioMoth_appendFile(char *name) { char p[1024]; Path(p, "sd", name); file = fopen(p, "ab"); return file != NULL; }
-bool AudioMoth_writeToFile(void *bytes, uint16_t n) { return file && fwrite(bytes, 1, n, file) == n; }
+bool AudioMoth_appendFile(char *name) { if (f_appendfail) return false; char p[1024]; Path(p, "sd", name); file = fopen(p, "ab"); return file != NULL; }
+bool AudioMoth_writeToFile(void *bytes, uint16_t n) { return !f_writefail && file && fwrite(bytes, 1, n, file) == n; }
 bool AudioMoth_closeFile(void) { if (file) fclose(file); file = NULL; return true; }
 bool AudioMoth_openFile(char *name) { char p[1024]; Path(p, "sd", name); file = fopen(p, "wb"); return file != NULL; }  /* create/truncate, as FA_CREATE_ALWAYS */
 
@@ -134,7 +169,7 @@ void sim_BirdPipeline_Push(const int16_t *pcm, uint32_t n) {
     if (window_pcm) fwrite(pcm, 2, n, window_pcm);
 }
 bool sim_BirdPipeline_Finish(float *logits) {
-    const bool ok = BirdPipeline_Finish(logits);
+    const bool ok = BirdPipeline_Finish(logits) && !f_pipefail;
     if (window_pcm) { fclose(window_pcm); window_pcm = NULL; }
     if (ok) {
         char p[1024], n[64];

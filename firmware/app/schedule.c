@@ -66,8 +66,13 @@ bool Sched_ParseConfig(const char* text, uint32_t length, uint32_t* seconds) {
       !ReadNumber(text, length, &pos, 2, &m) || !Expect(text, length, &pos, ':') ||
       !ReadNumber(text, length, &pos, 2, &s))
     return false;
+  /* Only whitespace may follow: "06:58:309" is a typo, not 06:58:30. */
+  if (pos < length && text[pos] != ' ' && text[pos] != '\t' && text[pos] != '\r' && text[pos] != '\n' && text[pos] != '\0') return false;
   if (Y < 2020 || Y > 2100 || M < 1 || M > 12 || D < 1 || D > 31 || h > 23 || m > 59 || s > 59) return false;
   const int32_t days = DaysFromCivil(Y, M, D);
+  int32_t cy, cm, cd;
+  CivilFromDays(days, &cy, &cm, &cd);
+  if (cy != Y || cm != M || cd != D) return false;  /* 2026-02-30 and the like */
   *seconds = (uint32_t)days * SCHED_DAY_S + (uint32_t)h * 3600u + (uint32_t)m * 60u + (uint32_t)s;
   return true;
 }

@@ -28,8 +28,10 @@ for lg, want in [(["nan"] * 9, "Bubo bubo,0,N," + ",".join(["0"] * 9)),
                  (["-1e30"] * 9, "Bubo bubo,11,N," + ",".join(["-999999"] * 9)),
                  (["1e30"] * 4 + ["-1e30"] * 5, "Bubo bubo,25,N," + ",".join(["999999"] * 4 + ["-999999"] * 5))]:
     cases.append("log 1792566000 " + " ".join(lg) + "\n"); expect.append("2026-10-21 07:00:00," + want + "\n")
-for bad in ["2026-13-01 00:00:00", "2026-10-21T06:00:00", "abc", "2026-10-21 25:00:00", "APPLIED 2026-10-21 06:58:30"]:
+for bad in ["2026-02-30 07:00:00", "2026-04-31 07:00:00", "2027-02-29 07:00:00", "2026-10-21 06:58:309", "2026-10-21 06:58:30x", "2026-13-01 00:00:00", "2026-10-21T06:00:00", "abc", "2026-10-21 25:00:00", "APPLIED 2026-10-21 06:58:30"]:
     cases.append(f"parse {bad}\n"); expect.append("ERR\n")
+for good, dt in [("2028-02-29 12:00:00", datetime.datetime(2028, 2, 29, 12)), ("  2026-10-21 06:58:30  ", datetime.datetime(2026, 10, 21, 6, 58, 30))]:
+    cases.append(f"parse {good}\n"); expect.append(f"{unix(dt)}\n")
 out = subprocess.run([S], input="".join(cases), capture_output=True, text=True).stdout
 bad = [(c, e, o) for c, e, o in zip(cases, expect, out.splitlines(keepends=True)) if e != o]
 print("cases", len(cases), "mismatches", len(bad)); print(bad[:2])
