@@ -1,0 +1,209 @@
+#include "bird_frontend.h"
+
+#include <math.h>
+#include <string.h>
+
+#define PI_F 3.14159265358979323846f
+
+static float Sigmoidf(float x) { return 1.0f / (1.0f + expf(-x)); }
+
+/* torch.linspace(0, 1, n) in float32: forward from the start in the first half, backward
+ * from the end in the second half. */
+static float Linspace01(int i, int n) {
+  const float step = 1.0f / (float)(n - 1);
+  return i < n / 2 ? (float)i * step : 1.0f - (float)(n - 1 - i) * step;
+}
+
+bool BirdFE_Init(BirdFrontEnd* fe, float breakpoint_hz, float transition_width, float f_min, float f_max) {
+  /* Hann window (periodic, as torch.hann_window) and FFT tables. */
+  for (int i = 0; i <= BFE_NFFT / 2; ++i) fe->window[i] = 0.5f - 0.5f * cosf(2.0f * PI_F * (float)i / (float)BFE_NFFT);
+  for (int i = 0; i < BFE_NFFT / 2; ++i) {
+    const float a = -2.0f * PI_F * (float)i / (float)BFE_NFFT;
+    fe->cos_tab[i] = cosf(a);
+    fe->sin_tab[i] = sinf(a);
+  }
+  for (int i = 0; i < BFE_NFFT; ++i) {
+    unsigned r = 0, v = (unsigned)i;
+    for (int b = 0; b < 10; ++b) { r = (r << 1) | (v & 1u); v >>= 1; }
+    fe->bit_rev[i] = (uint16_t)r;
+  }
+  /* Filterbank: triangular filters whose centres move from log to linear spacing. */
+  float centre_bin[BFE_MELS];
+  const float f_range = f_max - f_min;
+  const float norm_bp = (breakpoint_hz - f_min) / f_range;
+  const float bin_per_hz = (float)(BFE_NFFT / 2) / ((float)BFE_SAMPLE_RATE / 2.0f);
+  for (int m = 0; m < BFE_MELS; ++m) {
+    const float x = Linspace01(m, BFE_MELS);
+    const float log_part = f_min * powf(f_max / f_min, x);
+    const float lin_part = f_min + x * f_range;
+    const float s = Sigmoidf((x - norm_bp) * transition_width);
+    float c = (1.0f - s) * log_part + s * lin_part;
+    if (c < f_min) c = f_min;
+    if (c > f_max) c = f_max;
+    centre_bin[m] = c * bin_per_hz;
+  }
+  const float f_min_bin = f_min * bin_per_hz, f_max_bin = f_max * bin_per_hz;
+  const float eps = 1e-8f;
+  uint32_t used = 0;
+  for (int m = 0; m < BFE_MELS; ++m) {
+    const float left = m == 0 ? f_min_bin : centre_bin[m - 1];
+    const float right = m == BFE_MELS - 1 ? f_max_bin : centre_bin[m + 1];
+    const float c = centre_bin[m];
+    int k0 = (int)floorf(left), k1 = (int)ceilf(right);
+    if (k0 < 0) k0 = 0;
+    if (k1 > BFE_BINS - 1) k1 = BFE_BINS - 1;
+    fe->fb_start[m] = (uint16_t)k0;
+    fe->fb_offset[m] = (uint16_t)used;
+    int len = 0;
+    for (int k = k0; k <= k1; ++k) {
+      const float up = ((float)k - left) / ((c - left) + eps);
+      const float down = (right - (float)k) / ((right - c) + eps);
+      float w = up < down ? up : down;
+      if (w < 0.0f) w = 0.0f;
+      if (used + (uint32_t)len >= BFE_MAX_WEIGHTS) return false;
+      fe->fb_weight[used + (uint32_t)len] = w;
+      ++len;
+    }
+    fe->fb_len[m] = (uint16_t)len;
+    used += (uint32_t)len;
+  }
+  BirdFE_Reset(fe);
+  return true;
+}
+
+void BirdFE_Reset(BirdFrontEnd* fe) {
+  fe->samples = 0;
+  fe->frames = 0;
+}
+
+/* In-place radix-2 FFT of fe->re / fe->im (already in natural order). */
+static void Fft(BirdFrontEnd* fe) {
+  float* re = fe->re;
+  float* im = fe->im;
+  for (int i = 0; i < BFE_NFFT; ++i) {
+    const int j = fe->bit_rev[i];
+    if (j > i) {
+      float t = re[i]; re[i] = re[j]; re[j] = t;
+      t = im[i]; im[i] = im[j]; im[j] = t;
+    }
+  }
+  for (int len = 2; len <= BFE_NFFT; len <<= 1) {
+    const int half = len >> 1, stride = BFE_NFFT / len;
+    for (int base = 0; base < BFE_NFFT; base += len) {
+      for (int k = 0; k < half; ++k) {
+        const float wr = fe->cos_tab[k * stride], wi = fe->sin_tab[k * stride];
+        const int a = base + k, b = a + half;
+        const float tr = re[b] * wr - im[b] * wi, ti = re[b] * wi + im[b] * wr;
+        re[b] = re[a] - tr; im[b] = im[a] - ti;
+        re[a] += tr; im[a] += ti;
+      }
+    }
+  }
+}
+
+/* Sample of the zero-based clip at index i, with torch's reflect padding outside [0, n). */
+static inline int16_t PaddedSample(const BirdFrontEnd* fe, int32_t i, int32_t n_total) {
+  if (i < 0) i = -i;
+  if (i >= n_total) i = 2 * (n_total - 1) - i;
+  return fe->ring[(uint32_t)i & (BFE_RING - 1)];
+}
+
+static void ComputeFrame(BirdFrontEnd* fe, uint32_t t, int32_t n_total) {
+  const int32_t start = (int32_t)(t * BFE_HOP) - BFE_NFFT / 2;
+  for (int i = 0; i < BFE_NFFT; ++i) {
+    const float w = i <= BFE_NFFT / 2 ? fe->window[i] : fe->window[BFE_NFFT - i];
+    fe->re[i] = (float)PaddedSample(fe, start + i, n_total) * (1.0f / 32768.0f) * w;
+    fe->im[i] = 0.0f;
+  }
+  Fft(fe);
+  float mag[BFE_BINS];
+  for (int k = 0; k < BFE_BINS; ++k) mag[k] = sqrtf(fe->re[k] * fe->re[k] + fe->im[k] * fe->im[k]);
+  for (int m = 0; m < BFE_MELS; ++m) {
+    const float* w = fe->fb_weight + fe->fb_offset[m];
+    const float* x = mag + fe->fb_start[m];
+    float acc = 0.0f;
+    for (int j = 0; j < fe->fb_len[m]; ++j) acc += w[j] * x[j];
+    float p = acc * acc;
+    if (p < 1e-10f) p = 1e-10f;
+    float db = 10.0f * log10f(p) * 256.0f;
+    fe->spec_db[t][m] = (int16_t)lrintf(db);
+  }
+}
+
+void BirdFE_Push(BirdFrontEnd* fe, const int16_t* pcm, uint32_t n) {
+  /* Blocks of at most 256 samples keep the ring from wrapping over samples a pending frame still needs. */
+  while (n > 0 && fe->samples < BFE_CLIP_SAMPLES) {
+    uint32_t chunk = n < 256 ? n : 256;
+    if (fe->samples + chunk > BFE_CLIP_SAMPLES) chunk = BFE_CLIP_SAMPLES - fe->samples;
+    for (uint32_t i = 0; i < chunk; ++i) fe->ring[fe->samples++ & (BFE_RING - 1)] = pcm[i];
+    pcm += chunk;
+    n -= chunk;
+    /* Frame t needs samples up to t*hop + 511 (no end padding): compute it as soon as present. */
+    while (fe->frames < BFE_FRAMES) {
+      const uint32_t last_needed = fe->frames * BFE_HOP + BFE_NFFT / 2 - 1;
+      if (last_needed >= fe->samples) break;
+      if (fe->frames == 0 && fe->samples < BFE_NFFT / 2 + 1) break; /* start reflection needs x[1..512] */
+      ComputeFrame(fe, fe->frames, (int32_t)BFE_CLIP_SAMPLES);
+      ++fe->frames;
+    }
+  }
+}
+
+bool BirdFE_Complete(const BirdFrontEnd* fe) { return fe->samples >= BFE_CLIP_SAMPLES; }
+
+static bool FinishDb(BirdFrontEnd* fe, float* mean, float* inv_std, int16_t* floor_db) {
+  if (fe->samples < BFE_CLIP_SAMPLES) return false;
+  /* The last frames need samples beyond the end: reflect them. */
+  while (fe->frames < BFE_FRAMES) {
+    ComputeFrame(fe, fe->frames, (int32_t)BFE_CLIP_SAMPLES);
+    ++fe->frames;
+  }
+  int16_t max_db = INT16_MIN;
+  for (int t = 0; t < BFE_FRAMES; ++t)
+    for (int m = 0; m < BFE_MELS; ++m) if (fe->spec_db[t][m] > max_db) max_db = fe->spec_db[t][m];
+  *floor_db = (int16_t)(max_db - 80 * 256); /* top_db = 80 */
+  /* Mean of the (clamped) dB values: the sum of the int16 codes is exact in 64 bits. */
+  int64_t sum = 0;
+  for (int t = 0; t < BFE_FRAMES; ++t)
+    for (int m = 0; m < BFE_MELS; ++m) {
+      int16_t v = fe->spec_db[t][m];
+      if (v < *floor_db) { v = *floor_db; fe->spec_db[t][m] = v; }
+      sum += v;
+    }
+  const float count = (float)BFE_FRAMES * (float)BFE_MELS;
+  const float mu = (float)sum / (256.0f * count);
+  /* Second pass for the variance (no catastrophic cancellation, no double precision needed). */
+  float acc = 0.0f;
+  for (int t = 0; t < BFE_FRAMES; ++t)
+    for (int m = 0; m < BFE_MELS; ++m) {
+      const float d = (float)fe->spec_db[t][m] / 256.0f - mu;
+      acc += d * d;
+    }
+  const float var = acc / (count - 1.0f); /* unbiased, as torch.std */
+  *mean = mu;
+  *inv_std = 1.0f / (sqrtf(var) + 1e-5f);
+  return true;
+}
+
+bool BirdFE_FinishFloat(BirdFrontEnd* fe, float* out) {
+  float mean, inv_std; int16_t floor_db;
+  if (!FinishDb(fe, &mean, &inv_std, &floor_db)) return false;
+  for (int t = 0; t < BFE_FRAMES; ++t)
+    for (int m = 0; m < BFE_MELS; ++m) out[t * BFE_MELS + m] = ((float)fe->spec_db[t][m] / 256.0f - mean) * inv_std;
+  return true;
+}
+
+bool BirdFE_Finish(BirdFrontEnd* fe, int8_t* out, float scale, int zero_point) {
+  float mean, inv_std; int16_t floor_db;
+  if (!FinishDb(fe, &mean, &inv_std, &floor_db)) return false;
+  const float inv_scale = 1.0f / scale;
+  for (int t = 0; t < BFE_FRAMES; ++t)
+    for (int m = 0; m < BFE_MELS; ++m) {
+      const float v = ((float)fe->spec_db[t][m] / 256.0f - mean) * inv_std;
+      long q = lrintf(v * inv_scale) + zero_point;
+      out[t * BFE_MELS + m] = (int8_t)(q < -128 ? -128 : (q > 127 ? 127 : q));
+    }
+  return true;
+}
+
+uint32_t BirdFE_SizeOf(void) { return (uint32_t)sizeof(BirdFrontEnd); }

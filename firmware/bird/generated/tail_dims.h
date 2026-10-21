@@ -1,0 +1,1 @@
+#define BIRD_TAIL_FRAMES 301

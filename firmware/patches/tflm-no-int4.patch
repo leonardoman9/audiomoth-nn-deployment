@@ -1,0 +1,154 @@
+diff --git a/tensorflow/lite/micro/kernels/cmsis_nn/conv.cc b/tensorflow/lite/micro/kernels/cmsis_nn/conv.cc
+index 5266cbb..83f4c7a 100644
+--- a/tensorflow/lite/micro/kernels/cmsis_nn/conv.cc
++++ b/tensorflow/lite/micro/kernels/cmsis_nn/conv.cc
+@@ -13,6 +13,10 @@ See the License for the specific language governing permissions and
+ limitations under the License.
+ ==============================================================================*/
+ 
++// Local patch (WrenNet): the deployed models are int8-only, so the int4 weight paths are
++// compiled out to save ~15 KB of flash (CMSIS-NN s4 kernels are otherwise always linked).
++#define TFLM_NO_INT4 1
++
+ #include "tensorflow/lite/micro/kernels/conv.h"
+ 
+ #include "Include/arm_nnfunctions.h"
+@@ -201,10 +205,12 @@ arm_cmsis_nn_status convolve_wrapper(
+     return arm_convolve_wrapper_s8(ctx, conv_params, quant_params, input_dims,
+                                    input, filter_dims, filter, bias_dims, bias,
+                                    output_dims, output);
++#ifndef TFLM_NO_INT4
+   } else if (weightsT == kTfLiteInt4) {
+     return arm_convolve_wrapper_s4(ctx, conv_params, quant_params, input_dims,
+                                    input, filter_dims, filter, bias_dims, bias,
+                                    output_dims, output);
++#endif
+   } else {
+     return ARM_CMSIS_NN_ARG_ERROR;
+   }
+@@ -321,6 +327,7 @@ TfLiteStatus EvalQuantizedPerChannel(TfLiteContext* context, TfLiteNode* node,
+   return kTfLiteOk;
+ }
+ 
++#ifndef TFLM_NO_INT4
+ TfLiteStatus EvalInt4(TfLiteContext* context, TfLiteNode* node) {
+   const TfLiteEvalTensor* input =
+       tflite::micro::GetEvalInput(context, node, kConvInputTensor);
+@@ -342,6 +349,7 @@ TfLiteStatus EvalInt4(TfLiteContext* context, TfLiteNode* node) {
+   return EvalQuantizedPerChannel<int8_t, int32_t, kTfLiteInt4>(
+       context, node, params, data, input, filter, bias, output);
+ }
++#endif  // TFLM_NO_INT4
+ 
+ TfLiteStatus EvalInt8(TfLiteContext* context, TfLiteNode* node) {
+   const TfLiteEvalTensor* input =
+@@ -443,10 +451,12 @@ TfLiteStatus Eval(TfLiteContext* context, TfLiteNode* node) {
+     }
+     case kTfLiteInt8: {
+       switch (filter->type) {
++#ifndef TFLM_NO_INT4
+         case kTfLiteInt4: {
+           return EvalQuantizedPerChannel<int8_t, int32_t, kTfLiteInt4>(
+               context, node, params, data, input, filter, bias, output);
+         }
++#endif
+         case kTfLiteInt8: {
+           return EvalQuantizedPerChannel<int8_t, int32_t, kTfLiteInt8>(
+               context, node, params, data, input, filter, bias, output);
+@@ -488,9 +498,11 @@ TFLMRegistration Register_CONV_2D() {
+   return tflite::micro::RegisterOp(Init, Prepare, Eval);
+ }
+ 
++#ifndef TFLM_NO_INT4
+ TFLMRegistration Register_CONV_2D_INT4() {
+   return tflite::micro::RegisterOp(Init, Prepare, EvalInt4);
+ }
++#endif
+ 
+ TFLMRegistration Register_CONV_2D_INT8() {
+   return tflite::micro::RegisterOp(Init, Prepare, EvalInt8);
+diff --git a/tensorflow/lite/micro/kernels/cmsis_nn/depthwise_conv.cc b/tensorflow/lite/micro/kernels/cmsis_nn/depthwise_conv.cc
+index 6575017..a9fc68b 100644
+--- a/tensorflow/lite/micro/kernels/cmsis_nn/depthwise_conv.cc
++++ b/tensorflow/lite/micro/kernels/cmsis_nn/depthwise_conv.cc
+@@ -13,6 +13,10 @@ See the License for the specific language governing permissions and
+ limitations under the License.
+ ==============================================================================*/
+ 
++// Local patch (WrenNet): the deployed models are int8-only, so the int4 weight paths are
++// compiled out to save ~15 KB of flash (CMSIS-NN s4 kernels are otherwise always linked).
++#define TFLM_NO_INT4 1
++
+ #include "tensorflow/lite/micro/kernels/depthwise_conv.h"
+ 
+ #include "Include/arm_nnfunctions.h"
+@@ -175,9 +179,11 @@ TfLiteStatus Prepare(TfLiteContext* context, TfLiteNode* node) {
+     if (filter->type == kTfLiteInt8) {
+       buf_size = arm_depthwise_conv_wrapper_s8_get_buffer_size(
+           &dw_conv_params, &input_dims, &filter_dims, &output_dims);
++#ifndef TFLM_NO_INT4
+     } else if (filter->type == kTfLiteInt4) {
+       buf_size = arm_depthwise_conv_wrapper_s4_get_buffer_size(
+           &dw_conv_params, &input_dims, &filter_dims, &output_dims);
++#endif
+     } else {
+       MicroPrintf("Filter type %s (%d) not supported.",
+                   TfLiteTypeGetName(filter->type), filter->type);
+@@ -298,6 +304,7 @@ void EvalQuantizedPerChannel(TfLiteContext* context, TfLiteNode* node,
+       ARM_CMSIS_NN_SUCCESS);
+ }
+ 
++#ifndef TFLM_NO_INT4
+ void EvalQuantizedPerChannelInt4(TfLiteContext* context, TfLiteNode* node,
+                                  const TfLiteDepthwiseConvParams& params,
+                                  const OpData& data,
+@@ -334,6 +341,7 @@ void EvalQuantizedPerChannelInt4(TfLiteContext* context, TfLiteNode* node,
+           tflite::micro::GetTensorData<int8_t>(output)),
+       ARM_CMSIS_NN_SUCCESS);
+ }
++#endif  // TFLM_NO_INT4
+ 
+ void EvalQuantizedPerChannel16x8(TfLiteContext* context, TfLiteNode* node,
+                                  const TfLiteDepthwiseConvParams& params,
+@@ -408,11 +416,13 @@ TfLiteStatus Eval(TfLiteContext* context, TfLiteNode* node) {
+                                   bias, output);
+           break;
+         }
++#ifndef TFLM_NO_INT4
+         case kTfLiteInt4: {
+           EvalQuantizedPerChannelInt4(context, node, params, data, input,
+                                       filter, bias, output);
+           break;
+         }
++#endif
+         default: {
+           MicroPrintf("Filter type %s (%d) not supported.",
+                       TfLiteTypeGetName(filter->type), filter->type);
+@@ -480,6 +490,7 @@ TfLiteStatus EvalInt16x8(TfLiteContext* context, TfLiteNode* node) {
+   return kTfLiteOk;
+ }
+ 
++#ifndef TFLM_NO_INT4
+ TfLiteStatus EvalInt4(TfLiteContext* context, TfLiteNode* node) {
+   TFLITE_DCHECK(node->user_data != nullptr);
+   TFLITE_DCHECK(node->builtin_data != nullptr);
+@@ -503,6 +514,7 @@ TfLiteStatus EvalInt4(TfLiteContext* context, TfLiteNode* node) {
+                               output);
+   return kTfLiteOk;
+ }
++#endif  // TFLM_NO_INT4
+ 
+ }  // namespace
+ 
+@@ -518,9 +530,11 @@ TFLMRegistration Register_DEPTHWISE_CONV_2D_INT16() {
+   return tflite::micro::RegisterOp(Init, Prepare, EvalInt16x8);
+ }
+ 
++#ifndef TFLM_NO_INT4
+ TFLMRegistration Register_DEPTHWISE_CONV_2D_INT4() {
+   return tflite::micro::RegisterOp(Init, Prepare, EvalInt4);
+ }
++#endif
+ 
+ }  // namespace micro
+ }  // namespace tflite
