@@ -37,7 +37,7 @@ Maximum stack measured in QEMU over the whole pipeline: **2,708 B** (2.7 KB); pi
 `.data` 192 + `.bss` 14,112 B (+ 3 KB reserved heap). Wide margin on 32 KB.
 
 ## 5. Flash
-Complete firmware (application + classifier): **230,124 B of 245,760** (15.6 KB margin). TFLM+CMSIS-NN 53.6 KB (size build,
+Complete firmware (application + classifier): **230,380 B of 245,760** (15.0 KB margin; 230,124 B before the log-line and CONFIG.TXT hardening of section 12). TFLM+CMSIS-NN 53.6 KB (size build,
 no-int4 patch in `firmware/patches/`), model 94.7 KB, tail 27.5 KB, front-end tables ~10 KB. The original AudioMoth linker
 script compares a LENGTH with an ADDRESS (`__etext`), which makes it 16 KB stricter than the physical limit; fixed in our copy
 (`firmware/audiomoth_tflm.ld`). The rest of the firmware (FatFS, audiomoth.c, emlib, filters) is ~36 KB (diagnostic build
@@ -101,7 +101,32 @@ Flash with the same TFLM flags:
 The size flags are required (without them the margin drops below 1.2 KB with 14.3); with them the two compilers are
 equivalent (-100 B). An earlier version of this section compared 10.3 without the flags against 14.3 with them, and was wrong.
 
-## 12. Still open (needs the board or more data)
+## 12. Robustness: sanitizers, static analysis, fault injection, long run
+- **Sanitizers.** The simulator built with AddressSanitizer + UBSan (`SAN=1 tests/sim/build_sim.sh`), the schedule tests and
+  the FatFS test. ASan found a stack overflow, in the FatFS test's 64-byte line buffer. Checking the firmware side showed
+  that the device's 128-byte buffer held every normal line (~100 B), but a NaN, infinite or huge logit made the
+  `(int32_t)` cast undefined and could make a line ~165 B long. **Fixed:** logged values are clamped to ±999999 (NaN → 0)
+  and the percentage to 0–100, with tests for these cases. After the fix: 2 simulated days, all fault scenarios and the
+  schedule/FatFS tests run clean under the sanitizers, and the log is identical to the normal build.
+- **Static analysis.** clang static analyzer and `-Wall -Wextra -Wshadow -Wconversion` on `main_app.c`, `schedule.c`,
+  `bird_frontend.c`, `bird_tail.c`: no findings (the analyzer was checked on a file with a planted bug). ARM GCC with
+  `-Wall -Wextra` on the device build: no warnings in our code; the vendor `audiomoth.c` has harmless ones (unused
+  parameters, an unsigned value clamped against 0, an enum whose values match emlib's HFRCO bands). Vendor code untouched.
+- **Fault injection** (`SIM_FAULT` in `hal_sim.c`, 21 scenarios in `tests/sim/run_faults.py`, all PASS): no SD card at first
+  boot (retries every 60 s); SD or external SRAM lost after the clock is set (no session, sleeps to the next window, no
+  tight loop); every SD write failing, or LOG.TXT not opening (red blinks, session runs to its end); classification
+  failing; watchdog-style reset mid-session (logging resumes in the same window); power cut mid-session (lines written
+  before the cut survive intact; the clock is lost and the device waits for a new CONFIG.TXT, which then works); six
+  malformed CONFIG.TXT files and a missing one; three malformed REPLAY.PCM files (rejected, truncated, the normal session
+  still runs); a silent microphone (zero spread in the per-clip normalisation: lines stay finite and well formed).
+  **Found and fixed:** CONFIG.TXT `2026-02-30 07:00:00` was accepted (impossible dates are now rejected), and
+  `06:58:309` was read as 06:58:30 (only whitespace may follow the time now).
+- **Long run.** 400 simulated days from 2027-12-30 (two new years, the leap day 2028-02-29) with the real network
+  (`run_scenario.py` + `tests/sim/check_long_run.py`): **PASS**, 1,798 boots, 19,400 lines, every day present once and
+  in order, 48 or 49 lines per day, all inside 07:00–07:05, no broken values, no red LED. LOG.TXT grows by ~3.5 KB per
+  day (1.41 MB after 400 days; FAT32 allows 4 GB).
+
+## 13. Still open (needs the board or more data)
 Boot and external SRAM enable on the chip; real DMA/ADC capture and levels; the real SD driver; real timing and power (the
 estimates above can be off by ~2×); true accuracy on the test set (the Drive dataset lacks the training's test split, and
 the `os.listdir` order is not reproducible); domain gap with real device audio.

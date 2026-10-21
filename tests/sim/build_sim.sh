@@ -9,7 +9,9 @@ HERE=$(cd "$(dirname "$0")" && pwd); ROOT=$(cd "$HERE/../.." && pwd); APP="$ROOT
 BIRD="$ROOT/firmware/bird"; OUT="$HERE/out${OUTSUFFIX:-}"; mkdir -p "$OUT"
 CF="-O1"; LF=""; [ -n "$SAN" ] && { CF="-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=undefined"; LF="-fsanitize=address,undefined"; }
 D="$TFLM/tensorflow/lite/micro/tools/make/downloads"
-LIB="$TFLM/gen/osx_arm64_release_with_logs_cmsis_nn_gcc/lib/libtensorflow-microlite.a"
+# host library (scripts/build_tflm.sh with HOST=1): gen/<os>_<arch>_release_with_logs_cmsis_nn_gcc
+LIB=$(ls "$TFLM"/gen/*_release_with_logs_cmsis_nn_gcc/lib/libtensorflow-microlite.a 2>/dev/null | grep -v cortex_m | head -n 1)
+[ -n "$LIB" ] || { echo "no host TFLM library in $TFLM/gen (run HOST=1 scripts/build_tflm.sh)"; exit 1; }
 TF="-I$TFLM -I$D/flatbuffers/include -I$D/gemmlowp -I$D/ruy -I$D/cmsis_nn -I$D/cmsis_nn/Include -I$D/cmsis/CMSIS/Core/Include"
 python3 - "$MODEL" "$OUT/bird_model.cc" <<'PY'
 import sys

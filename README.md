@@ -17,7 +17,7 @@ window to `LOG.TXT`. The rest of the time the board sleeps (EM4). It does not us
 
 | | |
 |---|---|
-| Flash | 230,124 B of 245,760 (~15.6 KB margin) |
+| Flash | 230,380 B of 245,760 (~15 KB margin) |
 | Internal RAM | .data 192 B + .bss 14,112 B, stack ~2.7 KB |
 | External SRAM | ~160 KB (96 KiB TFLM arena + buffers) |
 | Model | int8 backbone 94.7 KB, 151 operators; tail (GRU 64) in C with int8 weights |
@@ -42,26 +42,26 @@ Lophophanes cristatus, Periparus ater, Poecile montanus, non-bird.
 - For the tests only: `cc`/`clang`, `qemu-system-arm`, `mtools`. Comparisons against the model also need a Python
   environment with `ai_edge_litert`, `torch`, `torchaudio`, `soundfile`.
 
-**From the WrenNet repository** (`docs/deployment/bird/`)
-- `bird_backbone_int8.tflite`: the model that goes into the firmware.
-- `bird_reference.npz` and the checkpoint `best_distillation_model.pt`: only needed for the comparison tests against PyTorch.
+The model that goes into the firmware is in this repository: `firmware/bird/model/bird_backbone_int8.tflite`
+(sha256 `6f77fa86…`, from the WrenNet repository, `docs/deployment/bird/`). The PyTorch checkpoint
+(`best_distillation_model.pt`) and `bird_reference.npz` from WrenNet are only needed for the comparisons against PyTorch.
 
 ## Build
 
 ```sh
 scripts/setup_tflm.sh    # fetches tflite-micro at the verified commit (e0021ca) and applies firmware/patches/tflm-no-int4.patch
 scripts/build_tflm.sh    # builds TFLM for Cortex-M4F; the first run downloads GCC and CMSIS (a few minutes)
-firmware/app/build_app.sh third_party/tflite-micro /path/to/WrenNet/docs/deployment/bird/bird_backbone_int8.tflite
+firmware/app/build_app.sh third_party/tflite-micro firmware/bird/model/bird_backbone_int8.tflite
 ```
 
 The output is `firmware/app/out/bird_logger.bin`, together with `bird_logger.axf`. The script prints the size:
-`flash image: 230124 bytes (limit 245760)`. The flags in `build_tflm.sh` (kernels at `-Os`) are required: without them the
+`flash image: 230380 bytes (limit 245760)`. The flags in `build_tflm.sh` (kernels at `-Os`) are required: without them the
 firmware exceeds 244 KB.
 
 The **diagnostic firmware** records WAV files instead of classifying. Use it to check the microphone on a real board:
 
 ```sh
-EXTRA_CF=-DBIRD_DIAG_RECORD firmware/app/build_app.sh third_party/tflite-micro .../bird_backbone_int8.tflite
+EXTRA_CF=-DBIRD_DIAG_RECORD firmware/app/build_app.sh third_party/tflite-micro firmware/bird/model/bird_backbone_int8.tflite
 ```
 
 ## Using the board
@@ -84,31 +84,38 @@ Start time and duration are set in `firmware/app/schedule.h` (`SCHED_WINDOW_*`).
 a `REPLAY,...` line to the log. The file contains one known 3 s window and is prepared with `tests/sim/run_replay.py`.
 It checks that the computation on the board matches the one on the computer.
 
-**First test on a real board**, in this order:
-1. diagnostic firmware → recorded WAVs: check microphone levels and noise;
-2. normal firmware with `REPLAY.PCM` → compare the logits with the computer's;
-3. full session at 07:00 → measure timing and power.
+**First test on a real board:** follow [docs/FIRST_BOARD_TEST.md](docs/FIRST_BOARD_TEST.md) (LED codes, diagnostic
+recording, level analysis, replay comparison, timing and power), using the tools in `tools/board/`.
 
 ## Verifying without a board
 
-```sh
-T=third_party/tflite-micro; M=/path/to/WrenNet/docs/deployment/bird/bird_backbone_int8.tflite
+Everything below also runs on every push in GitHub Actions (`.github/workflows/ci.yml`). The simulator needs the host
+TFLM library: `HOST=1 scripts/build_tflm.sh`.
 
-# schedule and log logic: 1,805 cases checked against Python's datetime
+```sh
+T=third_party/tflite-micro; M=firmware/bird/model/bird_backbone_int8.tflite
+
+# schedule and log logic: 1,816 cases checked against Python's datetime
 cc -Ifirmware/app firmware/app/schedule.c tests/schedule/test_schedule.c -lm -o /tmp/ts && python3 tests/schedule/test_schedule.py /tmp/ts
 
 # simulator: main_app.c and the real pipeline on a software model of the board, over several simulated days
 tests/sim/build_sim.sh $T $M
-python3 tests/sim/make_audio.py audio.raw <audio files or folders>
+python3 tests/sim/make_test_audio.py audio.raw 60      # synthetic audio; or make_audio.py from real recordings
 python3 tests/sim/run_scenario.py tests/sim/out/bird_logger_sim audio.raw /tmp/work 2
+python3 tests/sim/check_long_run.py /tmp/work 2026-10-21 2
 python3 tests/sim/verify_log.py /path/to/WrenNet best_distillation_model.pt /tmp/work    # comparison with PyTorch
+
+# fault injection (no SD, no SRAM, failed writes, power cut, reset, bad CONFIG.TXT / REPLAY.PCM, silence): 21 scenarios
+SAN=1 OUTSUFFIX=_san tests/sim/build_sim.sh $T $M      # with AddressSanitizer + UBSan
+python3 tests/sim/run_faults.py tests/sim/out_san/bird_logger_sim audio.raw /tmp/faults
 
 # file system: the real FatFS on a FAT32 image (for example: mformat -C -F -T 262144 -i card.img ::)
 tests/fstest/run_fstest.sh card.img
 ```
 
-The full pipeline in QEMU (PCM to logits on an emulated Cortex-M4, compared byte for byte with the computer) and the
-instruction and memory profile use `firmware/bird/build_bird_qemu.sh` and `tools/memcount.c`. Procedure and results are in
+The full pipeline on an emulated Cortex-M4F (PCM to logits, compared with the host pipeline and PyTorch):
+`tests/qemu/run_qemu_pipeline.sh $T python3` (needs `qemu-system-arm`, numpy and `ai_edge_litert`). The instruction and
+memory profile uses `firmware/bird/build_bird_qemu.sh` and `tools/memcount.c`. Procedure and results are in
 [docs/VERIFICATION.md](docs/VERIFICATION.md).
 
 ## Layout
@@ -118,10 +125,10 @@ firmware/app      application: main_app.c (hardware), schedule.c (schedule and l
 firmware/bird     front-end, TFLM backbone, GRU/attention tail, generated tables, QEMU and generator scripts
 firmware/patches  TFLM patch (removes the int4 kernels, saves flash)
 vendor/audiomoth  AudioMoth hardware library (emlib, FatFS, drivers, audiomoth.c) from AudioMoth-Firmware-Basic
-tests/            sim (simulator), fstest (FatFS), schedule, qemu (harness)
-tools/            table generator, QEMU instruction-count plugin, oscilloscope energy parser
+tests/            sim (simulator, fault injection, long runs), fstest (FatFS), schedule, qemu (pipeline test + vectors)
+tools/            board/ (first-board-test kit), table generator, QEMU instruction-count plugin, energy parser
 scripts/          setup_tflm.sh, build_tflm.sh
-docs/             VERIFICATION.md (all results), TFLM_BUILD.md, datasheets
+docs/             VERIFICATION.md (all results), FIRST_BOARD_TEST.md, TFLM_BUILD.md, datasheets
 benchmarks/       Raspberry Pi benchmarks (earlier work; audio-model-int8.tflite, 41 MB, is not in the repo)
 ```
 
