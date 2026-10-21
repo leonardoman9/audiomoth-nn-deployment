@@ -7,7 +7,8 @@ set -e
 TFLM=$(cd "$1" && pwd); MODEL=$(cd "$(dirname "$2")" && pwd)/$(basename "$2")
 HERE=$(cd "$(dirname "$0")" && pwd); ROOT=$(cd "$HERE/../.." && pwd); APP="$ROOT/firmware/app"; REPO="$ROOT/vendor/audiomoth"
 BIRD="$ROOT/firmware/bird"; OUT="$HERE/out${OUTSUFFIX:-}"; mkdir -p "$OUT"
-CF="-O1"; LF=""; [ -n "$SAN" ] && { CF="-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=undefined"; LF="-fsanitize=address,undefined"; }
+# vptr is off: TFLM is built without RTTI, so its typeinfo does not exist (Linux ld fails on it)
+CF="-O1"; LF=""; [ -n "$SAN" ] && { CF="-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize=vptr -fno-sanitize-recover=undefined"; LF="-fsanitize=address,undefined"; }
 D="$TFLM/tensorflow/lite/micro/tools/make/downloads"
 # host library (scripts/build_tflm.sh with HOST=1): gen/<os>_<arch>_release_with_logs_cmsis_nn_gcc
 LIB=$(ls "$TFLM"/gen/*_release_with_logs_cmsis_nn_gcc/lib/libtensorflow-microlite.a 2>/dev/null | grep -v cortex_m | head -n 1)

@@ -21,9 +21,9 @@ jobs:
           sudo apt-get install -y mtools qemu-system-arm clang
           python3 -m pip install --break-system-packages numpy ai-edge-litert
 
-      - name: Cache TFLM (source, toolchain, libraries)
+      - name: Restore TFLM (source, toolchain, libraries)
         id: tflm
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: third_party/tflite-micro
           key: tflm-${{ runner.os }}-${{ hashFiles('scripts/setup_tflm.sh', 'scripts/build_tflm.sh', 'firmware/patches/*') }}
@@ -31,6 +31,14 @@ jobs:
       - name: Fetch and build TFLM
         if: steps.tflm.outputs.cache-hit != 'true'
         run: scripts/setup_tflm.sh && HOST=1 scripts/build_tflm.sh
+
+      # saved right away, so a failing test later does not throw the ~10-minute TFLM build away
+      - name: Save TFLM
+        if: steps.tflm.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: third_party/tflite-micro
+          key: ${{ steps.tflm.outputs.cache-primary-key }}
 
       - name: Schedule and log logic (with sanitizers)
         run: |
