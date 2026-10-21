@@ -1,85 +1,41 @@
-# Porting TFLM + CMSIS-NN (Cortex-M4F)
+# TFLM + CMSIS-NN for the AudioMoth (Cortex-M4F)
 
-Sostituisce i percorsi simulati del firmware con TensorFlow Lite Micro reale.
-Per ora e' un test autonomo, non ancora integrato nel firmware AudioMoth.
-
-`main.cc` esegue backbone e streaming su Cortex-M4F emulato (QEMU `mps2-an386`),
-con kernel CMSIS-NN e istruzioni DSP, e confronta backbone, stato nascosto e
-logits con i vettori di riferimento di WrenNet (`docs/deployment/reference`).
+## Building TFLM
 
 ```sh
-# TFLM compilato per M4: gmake -f tensorflow/lite/micro/tools/make/Makefile \
-#   TARGET=cortex_m_generic TARGET_ARCH=cortex-m4+fp OPTIMIZED_KERNEL_DIR=cmsis_nn \
-#   BUILD_TYPE=release_with_logs microlite
-RAM_KB=64 ./build.sh /percorso/tflite-micro /percorso/WrenNet 29696
-./run_qemu.sh
+scripts/setup_tflm.sh    # tflite-micro at commit e0021ca434cd930acbab69768e88d959083a3d4b + firmware/patches/tflm-no-int4.patch
+scripts/build_tflm.sh    # builds the two libraries below
 ```
 
-## Risultati (TFLM e0021ca, GCC 14.3.1, `-Os`, `NDEBUG`)
+`build_tflm.sh` runs, for `BUILD_TYPE=release` and `BUILD_TYPE=release_with_logs`:
 
-- Parita': **0 differenze** su 12 casi backbone e 216 frame streaming (stato
-  ricircolato con requantizzazione). Non e' una prova su scheda ne' di accuratezza.
-- Flash firmware (`.text`, include i due modelli da 76 KB): 210.872 B su 262.144 B.
-  Il firmware AudioMoth esistente non e' incluso.
-- Arena: dopo l'inizializzazione servono 20.404 B (backbone) e 5.448 B (streaming),
-  ma `AllocateTensors` richiede un'arena di **almeno ~29,2-29,7 KB** per il backbone
-  (fallisce a 29.184 B, riesce a 29.696 B): il picco e' nella fase di preparazione.
-- Stack massimo osservato: 1.632 B.
+```sh
+gmake -f tensorflow/lite/micro/tools/make/Makefile TARGET=cortex_m_generic TARGET_ARCH=cortex-m4+fp \
+  OPTIMIZED_KERNEL_DIR=cmsis_nn BUILD_TYPE=<type> KERNEL_OPTIMIZATION_LEVEL=-Os \
+  THIRD_PARTY_KERNEL_OPTIMIZATION_LEVEL=-Os OPTIMIZE_KERNELS_FOR=KERNELS_OPTIMIZED_FOR_SIZE microlite
+```
 
-## RAM: arena nella SRAM esterna (risolto nel test)
+- `release` (error strings stripped) is used by `firmware/app/build_app.sh`.
+- `release_with_logs` is used by the QEMU tests (`firmware/bird/build_bird_qemu.sh`).
+- The size flags are required: with the default `-O2` kernels the firmware grows to 244,620 B, against a limit of 245,760 B.
+- The patch removes the int4 CMSIS-NN kernels, which the model does not use, to save flash.
+- TFLM downloads its own toolchain (GCC 14.3.1). GNU Arm 10.3-2021.10 gives the same size (230,024 B vs 230,124 B,
+  see VERIFICATION.md).
 
-L'AudioMoth ha 256 KB di SRAM esterna (`0x80000000`), gia' usata per i buffer di
-registrazione. Con l'arena li' (`-DARENA_IN_EXTSRAM`, 32 KB; in QEMU una regione
-sostitutiva a `0x20100000`) e il vincolo reale di 32 KB per la RAM interna:
+## How the port is split
 
-- RAM interna statica: 680 B; stack massimo 1.632 B. Resta ampio margine.
-- Parita': 0 differenze, come prima.
-- Flash: 210.872 B, ma lo spazio applicativo AudioMoth e' 240 KB (0x4000-0x40000):
-  restano ~34 KB per tutto il firmware non-NN. Da verificare.
-- Il capitolo di deployment della tesi (`example.tex`) descrive gia' questa scelta
-  (arena da 128 KiB in SRAM esterna, partizioni 40/20 KiB). Il backbone ne richiede
-  ~29,7 KB, quindi 40 KiB bastano.
-- Da fare sul firmware reale: abilitare la SRAM esterna prima di `AllocateTensors`
-  e sottrarre la zona ai buffer di registrazione (`NUMBER_OF_BUFFERS` in `main.c`).
-  Gli accessi alla SRAM esterna sono piu' lenti: latenza ed energia vanno misurate.
+TFLM has no GRU operator, so the model runs in three parts:
 
-## Piano di memoria offline (provato, nessun vantaggio)
+1. **Front-end in C** (`firmware/bird/bird_frontend.c`): streaming STFT (n_fft 1024, hop 320), 64 learned filters, dB
+   with top_db 80, per-clip standardisation. Constant tables are in flash; FFT buffers are in internal RAM.
+2. **int8 CNN backbone on TFLM + CMSIS-NN** (`nn_bird.cc`): input `[1,1,301,64]`, output `[1,1,301,32]`, 151 operators,
+   8-operator resolver, 96 KiB arena in external SRAM.
+3. **Tail in C** (`bird_tail.c`): GRU 64, projection, temporal attention, FC; int8 weights with per-row scales,
+   float computation.
 
-`add_offline_plan.cc` crea una copia del `.tflite` con il metadato
-`OfflineMemoryAllocation` (stessi pesi e operatori; +448 B backbone, +240 B
-streaming). Resta bit-exact, ma l'arena minima non cambia: fallisce a 28.672 B e
-riesce a 29.696 B come prima. Il picco e' in `CommitStaticMemoryPlan`, dove servono
-`AllocationInfo` e memoria del planner proporzionali ai 202 tensori del grafo; gli
-activation tensor sono solo ~2,3 KB (CORREZIONE: valeva per il modello KWS a 18 frame; per il backbone degli uccelli, a 301 frame, la parte non persistente dell'arena e' ~67 KB). Ridurre il picco richiederebbe un grafo con
-meno tensori (43 RESHAPE nel backbone), cioe' una trasformazione del modello.
+## Notes
 
-## Nota sulle misure della tesi
-
-Latenza (1,692 s/inferenza), energia (0,0771 J) e memoria riportate in `example.tex`
-vengono dal firmware in cui backbone e GRU erano simulati: non misurano la rete
-vera. Vanno rifatte con questo port, una volta integrato.
-
-## Firmware AudioMoth con TFLM reale (`firmware/`)
-
-`build_fw.sh` compila per EFM32WG380F256 con le sorgenti reali del repository
-(device, emlib, USB, `audiomoth.c`), TFLM + CMSIS-NN e i due modelli. `main.cc`
-esegue un self-test all'avvio (backbone su un blocco noto + 18 passi streaming,
-confronto byte per byte col riferimento) e segnala l'esito: 3 lampeggi verdi =
-PASS, 10 rossi = FAIL. Risultati leggibili via GDB (`g_result*`, cicli in
-`g_result.cycles_*`, clock in `g_core_clock_hz`). Arene in SRAM esterna:
-40 KiB backbone + 20 KiB streaming (`.extsram`, `0x80000000`).
-
-Misurato sul build (GCC 14.3.1, `-Os`, `NDEBUG`):
-
-- Flash: `.text` 226.272 B; lo spazio applicativo e' 245.760 B (0x4000-0x40000),
-  restano ~19,5 KB per la logica applicativa (registrazione, FatFS, configurazione):
-  **margine stretto**, da verificare con l'applicazione completa.
-- RAM interna: .data 112 + .bss 2.144 + heap 3.072 + stack 1.024 = ~6,3 KB su 32 KB.
-- SRAM esterna: 61.440 B.
-- `build_qemu.sh` esegue lo stesso `nn_real.cc` + `selftest.cc` su Cortex-M4 emulato
-  con un `audiomoth.h` fittizio: **PASS, 0 differenze**.
-
-**Non verificato:** esecuzione su scheda (QEMU non emula l'EFM32), tempi e consumi
-con SRAM esterna reale, e soprattutto il front-end audio -> spettrogramma: non e'
-implementato perche' la sua definizione non e' stata recuperata. Quindi questo
-firmware verifica la rete, non ancora il riconoscimento da microfono.
+- `AllocateTensors` needs more arena than the steady state: the peak is in the memory-planning phase and scales with
+  the number of tensors. Rewriting the backbone as a 4-D graph without RESHAPE operators (151 operators) reduced it.
+- Latency and energy have to be measured on hardware with this port; the figures so far are estimates from QEMU
+  instruction and memory-access counts.

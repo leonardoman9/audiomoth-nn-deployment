@@ -1,140 +1,138 @@
-# WrenNet su AudioMoth
+# WrenNet on AudioMoth
 
-Firmware per **AudioMoth Dev** (EFM32WG380F256, Cortex-M4F a 48 MHz). Registra dal microfono e classifica il canto
-degli uccelli con la rete **WrenNet** (8 specie + "non-bird"). Tutto il calcolo avviene sulla scheda:
+Firmware for the **AudioMoth Dev** (EFM32WG380F256, Cortex-M4F at 48 MHz). It records from the microphone and classifies
+bird song with the **WrenNet** network (8 species + "non-bird"). All computation runs on the board:
 
 ```
-microfono -> ADC 384 kHz -> decimazione a 32 kHz -> front-end C (STFT + 64 filtri appresi, dB, normalizzazione)
-          -> backbone CNN int8 (TFLM + CMSIS-NN) -> GRU + attenzione + FC in C -> 9 logit -> LOG.TXT su microSD
+microphone -> ADC 384 kHz -> decimation to 32 kHz -> C front-end (STFT + 64 learned filters, dB, normalisation)
+           -> int8 CNN backbone (TFLM + CMSIS-NN) -> GRU + attention + FC in C -> 9 logits -> LOG.TXT on microSD
 ```
 
-Ogni giorno alle **07:00** (orologio della scheda) classifica circa **5 minuti** di audio in finestre da 3 s. Per ogni
-finestra aggiunge una riga a `LOG.TXT`. Il resto del tempo la scheda dorme (EM4). Non usa USB, GPS né l'app di
-configurazione.
+Every day at **07:00** (board clock) it classifies about **5 minutes** of audio in 3 s windows and appends one line per
+window to `LOG.TXT`. The rest of the time the board sleeps (EM4). It does not use USB, GPS or the configuration app.
 
-> **Stato.** Verificato solo in emulazione: simulatore su computer, Cortex-M4 in QEMU, FatFS su immagine FAT32.
-> **Non è ancora stato eseguito su una scheda reale.** Tempi ed energia sono stime. Risultati completi in
+> **Status.** Verified in emulation only: host simulator, Cortex-M4 in QEMU, FatFS on a FAT32 image.
+> **It has not yet run on a real board.** Timing and energy figures are estimates. Full results in
 > [docs/VERIFICATION.md](docs/VERIFICATION.md).
 
 | | |
 |---|---|
-| Flash | 230.124 B su 245.760 (margine ~15,6 KB) |
-| RAM interna | .data 192 B + .bss 14.112 B, stack ~2,7 KB |
-| SRAM esterna | ~160 KB (arena TFLM 96 KiB + buffer) |
-| Modello | backbone int8 94,7 KB, 151 operatori; coda (GRU 64) in C con pesi int8 |
-| Accuratezza (8 specie, 161 finestre) | float 76,4 %, pipeline del dispositivo 75,8 % |
+| Flash | 230,124 B of 245,760 (~15.6 KB margin) |
+| Internal RAM | .data 192 B + .bss 14,112 B, stack ~2.7 KB |
+| External SRAM | ~160 KB (96 KiB TFLM arena + buffers) |
+| Model | int8 backbone 94.7 KB, 151 operators; tail (GRU 64) in C with int8 weights |
+| Accuracy (8 species, 161 windows) | float 76.4 %, device pipeline 75.8 % |
 
-Le classi, nell'ordine dei logit, sono: Bubo bubo, Certhia familiaris, Apus apus, Certhia brachydactyla, Emberiza cia,
+Classes, in logit order: Bubo bubo, Certhia familiaris, Apus apus, Certhia brachydactyla, Emberiza cia,
 Lophophanes cristatus, Periparus ater, Poecile montanus, non-bird.
 
-## Cosa serve
+## Requirements
 
 **Hardware**
-- AudioMoth **Dev** con SRAM esterna e slot microSD. Le versioni con microfono USB (≥ AM_VERSION_4) non hanno né SD né
-  SRAM esterna.
-- microSD formattata **FAT32**. FatFS è ridotto: niente exFAT, solo nomi 8.3.
-- Per programmare la scheda: AudioMoth Flash App (bootloader) oppure J-Link/SWD.
+- AudioMoth **Dev** with external SRAM and a microSD slot. The USB microphone versions (≥ AM_VERSION_4) have neither SD
+  nor external SRAM.
+- microSD card formatted **FAT32**. FatFS is trimmed: no exFAT, 8.3 file names only.
+- To program the board: the AudioMoth Flash App (bootloader) or J-Link/SWD.
 
-**Software (macOS o Linux)**
-- `git`, `curl`, **GNU make ≥ 4**. Su macOS: `brew install make`, che installa `gmake`; il `make` di sistema è troppo vecchio.
-- `python3` con `numpy`.
-- La toolchain ARM **non** va installata: la scarica TFLM (GCC 14.3.1). Funziona anche GNU Arm 10.3-2021.10, con la
-  stessa dimensione (vedi VERIFICATION.md).
-- Solo per i test: `cc`/`clang`, `qemu-system-arm`, `mtools`. Per i confronti con il modello serve anche un ambiente
-  Python con `ai_edge_litert`, `torch`, `torchaudio`, `soundfile`.
+**Software (macOS or Linux)**
+- `git`, `curl`, **GNU make ≥ 4**. On macOS: `brew install make`, which installs `gmake`; the system `make` is too old.
+- `python3` with `numpy`.
+- You do **not** need to install an ARM toolchain: TFLM downloads one (GCC 14.3.1). GNU Arm 10.3-2021.10 also works and
+  gives the same size (see VERIFICATION.md).
+- For the tests only: `cc`/`clang`, `qemu-system-arm`, `mtools`. Comparisons against the model also need a Python
+  environment with `ai_edge_litert`, `torch`, `torchaudio`, `soundfile`.
 
-**Dal repository WrenNet** (`docs/deployment/bird/`)
-- `bird_backbone_int8.tflite`: il modello che finisce nel firmware.
-- `bird_reference.npz` e il checkpoint `best_distillation_model.pt`: servono solo per i test di confronto con PyTorch.
+**From the WrenNet repository** (`docs/deployment/bird/`)
+- `bird_backbone_int8.tflite`: the model that goes into the firmware.
+- `bird_reference.npz` and the checkpoint `best_distillation_model.pt`: only needed for the comparison tests against PyTorch.
 
-## Compilare
+## Build
 
 ```sh
-scripts/setup_tflm.sh    # scarica tflite-micro al commit verificato (e0021ca) e applica firmware/patches/tflm-no-int4.patch
-scripts/build_tflm.sh    # compila TFLM per Cortex-M4F; la prima volta scarica GCC e CMSIS (qualche minuto)
-firmware/app/build_app.sh third_party/tflite-micro /percorso/WrenNet/docs/deployment/bird/bird_backbone_int8.tflite
+scripts/setup_tflm.sh    # fetches tflite-micro at the verified commit (e0021ca) and applies firmware/patches/tflm-no-int4.patch
+scripts/build_tflm.sh    # builds TFLM for Cortex-M4F; the first run downloads GCC and CMSIS (a few minutes)
+firmware/app/build_app.sh third_party/tflite-micro /path/to/WrenNet/docs/deployment/bird/bird_backbone_int8.tflite
 ```
 
-Il risultato è `firmware/app/out/bird_logger.bin`, insieme a `bird_logger.axf`. Lo script stampa l'occupazione:
-`flash image: 230124 bytes (limit 245760)`. Le opzioni di `build_tflm.sh` (kernel a `-Os`) sono necessarie: senza, il
-firmware supera i 244 KB.
+The output is `firmware/app/out/bird_logger.bin`, together with `bird_logger.axf`. The script prints the size:
+`flash image: 230124 bytes (limit 245760)`. The flags in `build_tflm.sh` (kernels at `-Os`) are required: without them the
+firmware exceeds 244 KB.
 
-Il **firmware diagnostico** registra file WAV invece di classificare e serve a controllare il microfono sulla scheda vera:
+The **diagnostic firmware** records WAV files instead of classifying. Use it to check the microphone on a real board:
 
 ```sh
 EXTRA_CF=-DBIRD_DIAG_RECORD firmware/app/build_app.sh third_party/tflite-micro .../bird_backbone_int8.tflite
 ```
 
-## Usare la scheda
+## Using the board
 
-1. Carica il `.bin` con il bootloader; l'applicazione parte da `0x4000`.
-2. Sulla microSD crea `CONFIG.TXT` con una sola riga, l'ora attuale: `2026-10-21 06:58:30`.
-3. Inserisci la scheda e alimenta. All'avvio l'orologio viene impostato e `CONFIG.TXT` viene riscritto come
-   `APPLIED <ora>`, così non viene applicato di nuovo.
-4. Dalle 07:00 alle 07:05 il firmware scrive una riga ogni ~6 s in `LOG.TXT`:
+1. Flash the `.bin` with the bootloader; the application starts at `0x4000`.
+2. On the microSD card, create `CONFIG.TXT` with a single line holding the current time: `2026-10-21 06:58:30`.
+3. Insert the card and power on. At boot the clock is set and `CONFIG.TXT` is rewritten as `APPLIED <time>`, so it is not
+   applied again.
+4. From 07:00 to 07:05 the firmware writes one line about every 6 s to `LOG.TXT`:
 
    ```
    2026-10-21 07:00:09,Bubo bubo,69,Y,241,-87,-15,-19,-65,-56,-37,-39,-79
-   ora, classe più probabile, probabilità %, Y se >= 50 %, 9 logit x100
+   time, most likely class, probability %, Y if >= 50 %, 9 logits x100
    ```
 
-Se manca l'alimentazione l'ora si perde e serve un nuovo `CONFIG.TXT`. La deriva dell'orologio è di ±0,9 s al giorno.
-Orario e durata si cambiano in `firmware/app/schedule.h` (`SCHED_WINDOW_*`).
+If power is lost, the time is lost too and a new `CONFIG.TXT` is needed. Clock drift is ±0.9 s per day.
+Start time and duration are set in `firmware/app/schedule.h` (`SCHED_WINDOW_*`).
 
-**Modalità replay.** Se sulla SD c'è `REPLAY.PCM`, il firmware classifica quella finestra invece del microfono e scrive
-una riga `REPLAY,...` nel log. Il file contiene una finestra nota da 3 s e si prepara con `tests/sim/run_replay.py`.
-Serve a verificare che il calcolo sulla scheda coincida con quello del computer.
+**Replay mode.** If the card holds `REPLAY.PCM`, the firmware classifies that window instead of the microphone and writes
+a `REPLAY,...` line to the log. The file contains one known 3 s window and is prepared with `tests/sim/run_replay.py`.
+It checks that the computation on the board matches the one on the computer.
 
-**Primo test su una scheda reale**, in quest'ordine:
-1. firmware diagnostico → WAV registrati: controlla livelli e rumore del microfono;
-2. firmware normale con `REPLAY.PCM` → confronta i logit con quelli del computer;
-3. sessione completa alle 07:00 → misura tempi e consumi.
+**First test on a real board**, in this order:
+1. diagnostic firmware → recorded WAVs: check microphone levels and noise;
+2. normal firmware with `REPLAY.PCM` → compare the logits with the computer's;
+3. full session at 07:00 → measure timing and power.
 
-## Verificare senza scheda
+## Verifying without a board
 
 ```sh
-T=third_party/tflite-micro; M=/percorso/WrenNet/docs/deployment/bird/bird_backbone_int8.tflite
+T=third_party/tflite-micro; M=/path/to/WrenNet/docs/deployment/bird/bird_backbone_int8.tflite
 
-# logica di orario e log: 1.805 casi confrontati con datetime di Python
+# schedule and log logic: 1,805 cases checked against Python's datetime
 cc -Ifirmware/app firmware/app/schedule.c tests/schedule/test_schedule.c -lm -o /tmp/ts && python3 tests/schedule/test_schedule.py /tmp/ts
 
-# simulatore: main_app.c e la pipeline vera su un modello software della scheda, per più giorni simulati
+# simulator: main_app.c and the real pipeline on a software model of the board, over several simulated days
 tests/sim/build_sim.sh $T $M
-python3 tests/sim/make_audio.py audio.raw <file o cartelle audio>
+python3 tests/sim/make_audio.py audio.raw <audio files or folders>
 python3 tests/sim/run_scenario.py tests/sim/out/bird_logger_sim audio.raw /tmp/work 2
-python3 tests/sim/verify_log.py /percorso/WrenNet best_distillation_model.pt /tmp/work    # confronto con PyTorch
+python3 tests/sim/verify_log.py /path/to/WrenNet best_distillation_model.pt /tmp/work    # comparison with PyTorch
 
-# file system: FatFS reale su un'immagine FAT32 (per esempio: mformat -C -F -T 262144 -i card.img ::)
+# file system: the real FatFS on a FAT32 image (for example: mformat -C -F -T 262144 -i card.img ::)
 tests/fstest/run_fstest.sh card.img
 ```
 
-La pipeline completa in QEMU (da PCM a logit su Cortex-M4 emulato, confronto byte per byte con il computer) e il profilo
-di istruzioni e memoria usano `firmware/bird/build_bird_qemu.sh` e `tools/memcount.c`. Procedura e risultati sono in
+The full pipeline in QEMU (PCM to logits on an emulated Cortex-M4, compared byte for byte with the computer) and the
+instruction and memory profile use `firmware/bird/build_bird_qemu.sh` and `tools/memcount.c`. Procedure and results are in
 [docs/VERIFICATION.md](docs/VERIFICATION.md).
 
-## Struttura
+## Layout
 
 ```
-firmware/app      applicazione: main_app.c (hardware), schedule.c (orario e log), fatfs_conf/, build_app.sh
-firmware/bird     front-end, backbone TFLM, coda GRU/attenzione, tabelle generate, script QEMU e di generazione
-firmware/patches  patch TFLM (toglie i kernel int4, risparmia flash)
-vendor/audiomoth  libreria hardware AudioMoth (emlib, FatFS, driver, audiomoth.c) da AudioMoth-Firmware-Basic
-tests/            sim (simulatore), fstest (FatFS), schedule, qemu (harness)
-tools/            generatore di tabelle, plugin QEMU conta-istruzioni, parser energia da oscilloscopio
+firmware/app      application: main_app.c (hardware), schedule.c (schedule and log), fatfs_conf/, build_app.sh
+firmware/bird     front-end, TFLM backbone, GRU/attention tail, generated tables, QEMU and generator scripts
+firmware/patches  TFLM patch (removes the int4 kernels, saves flash)
+vendor/audiomoth  AudioMoth hardware library (emlib, FatFS, drivers, audiomoth.c) from AudioMoth-Firmware-Basic
+tests/            sim (simulator), fstest (FatFS), schedule, qemu (harness)
+tools/            table generator, QEMU instruction-count plugin, oscilloscope energy parser
 scripts/          setup_tflm.sh, build_tflm.sh
-docs/             VERIFICATION.md (tutti i risultati), TFLM_BUILD.md, datasheet
-benchmarks/       benchmark Raspberry Pi (lavoro precedente; audio-model-int8.tflite, 41 MB, non è nel repo)
+docs/             VERIFICATION.md (all results), TFLM_BUILD.md, datasheets
+benchmarks/       Raspberry Pi benchmarks (earlier work; audio-model-int8.tflite, 41 MB, is not in the repo)
 ```
 
-## Limiti noti
+## Known limitations
 
-- Mai eseguito su hardware. Restano da provare: l'abilitazione della SRAM esterna, il driver SD (SPI), i livelli reali
-  del microfono, i tempi (stima: ~6–8 s di calcolo per finestra) e l'energia (stima: ~0,8–1 J per finestra). Le stime
-  possono sbagliare di circa 2×.
-- Il modello è stato addestrato su clip centrate sui richiami; qui si usano finestre fisse da 3 s, quindi sul campo
-  l'accuratezza può essere più bassa. Non c'è ancora mitigazione dei falsi positivi.
-- Il vecchio deployment "KWS" simulato, che non eseguiva la rete addestrata, è conservato solo nel tag git `pre-cleanup`.
+- Never run on hardware. Still to be tested: enabling the external SRAM, the SD driver (SPI), real microphone levels,
+  timing (estimate: ~6–8 s of compute per window) and energy (estimate: ~0.8–1 J per window). The estimates can be off
+  by about 2×.
+- The model was trained on clips centred on calls; here fixed 3 s windows are used, so accuracy in the field may be lower.
+  There is no false-positive mitigation yet.
 
-## Licenza
+## License
 
-MIT, vedi [LICENSE](LICENSE). La libreria in `vendor/audiomoth` è di Open Acoustic Devices.
+MIT, see [LICENSE](LICENSE). The library in `vendor/audiomoth` is by Open Acoustic Devices.

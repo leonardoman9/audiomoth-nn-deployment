@@ -1,47 +1,46 @@
-# Applicazione "bird logger" per AudioMoth
+# "Bird logger" application for AudioMoth
 
-Ogni giorno alle **07:00** (orologio del dispositivo) per **5 minuti**: registra finestre da 3 s a
-32 kHz, le classifica con il modello di uccelli e aggiunge una riga a `LOG.TXT` sulla SD:
+Every day at **07:00** (device clock), for **5 minutes**, it records 3 s windows at 32 kHz, classifies them with the bird
+model and appends one line to `LOG.TXT` on the SD card:
 
-    2026-10-21 07:00:03,Certhia brachydactyla,55,Y     (data ora, classe, probabilita' %, Y = >= 50%)
+    2026-10-21 07:00:03,Certhia brachydactyla,55,Y,...     (date time, class, probability %, Y = >= 50 %, 9 logits x100)
 
-Fuori dalla finestra il dispositivo e' spento (power-down, sveglia a ore). L'orologio si imposta con
-`CONFIG.TXT` sulla SD (una riga `YYYY-MM-DD hh:mm:ss`), che viene poi riscritto come `APPLIED <ora>`.
-Niente USB, GPS, scrittura WAV, app di configurazione. Orario e durata: `SCHED_WINDOW_*` in
-`schedule.h`. L'ordine delle classi e' quello degli INDICI DI USCITA del modello (ordine di `allowed_bird_classes` nella configurazione di training), non quello della riga "Class names" del log: vedi `docs/VERIFICATION.md` (`kClassNames` in `schedule.c`).
+Outside the window the device is powered down (power-down, hourly wake-ups). The clock is set with `CONFIG.TXT` on the SD
+card (one line `YYYY-MM-DD hh:mm:ss`), which is then rewritten as `APPLIED <time>`. No USB, GPS, WAV writing or
+configuration app. Start time and duration: `SCHED_WINDOW_*` in `schedule.h`. The class order is the model's OUTPUT INDEX
+order (the order of `allowed_bird_classes` in the training configuration), not the order of the "Class names" line in
+the training log: see `docs/VERIFICATION.md` (`kClassNames` in `schedule.c`).
 
-File: `main_app.c` (colla hardware, segue `makeRecording` dell'originale), `schedule.c` (logica pura,
-verificata su 1.805 casi (`tests/schedule/`) contro `datetime` di Python), `fatfs_conf/` (FatFS ridotto), `build_app.sh`
-(firmware), `tests/sim/` (simulatore su computer).
+Files: `main_app.c` (hardware glue, follows `makeRecording` of the original firmware), `schedule.c` (pure logic, checked
+on 1,805 cases against Python's `datetime`, see `tests/schedule/`), `fatfs_conf/` (trimmed FatFS), `build_app.sh`
+(firmware). The host simulator is in `tests/sim/`.
 
-## Firmware (misurato, GCC 14.3.1 `-Os`)
+## Firmware (measured, GCC 14.3.1 `-Os`)
 
-    firmware/app/build_app.sh TFLM_ROOT bird_backbone_int8.tflite     # TFLM da scripts/build_tflm.sh
+    firmware/app/build_app.sh TFLM_ROOT bird_backbone_int8.tflite     # TFLM from scripts/build_tflm.sh
 
-- Flash: **230.124 B** su 245.760 disponibili (margine ~15,6 KB; vedi `docs/VERIFICATION.md`). Modello 94,7 KB, TFLM+CMSIS-NN
-  ~57 KB, coda C 27,6 KB, libc/libm ~23 KB, FatFS+SD 7,4 KB, emlib 6,7 KB, audiomoth.c 5 KB.
-- FatFS ridotto (CP437, nomi 8.3, **niente exFAT**: usare una scheda FAT32): evita ~60 KB di tabelle.
-  Il firmware AudioMoth completo originale (USB, GPS, filtri, FatFS standard) occupa ~150 KB.
-- RAM interna: .data 192 B + .bss 14.112 B (+ heap 3 KB, stack in coda). SRAM esterna: 182.576 B su 262.144.
+- Flash: **230,124 B** of 245,760 available (~15.6 KB margin; see `docs/VERIFICATION.md`). Model 94.7 KB, TFLM+CMSIS-NN
+  ~57 KB, C tail 27.6 KB, libc/libm ~23 KB, FatFS+SD 7.4 KB, emlib 6.7 KB, audiomoth.c 5 KB.
+- Trimmed FatFS (CP437, 8.3 names, **no exFAT**: use a FAT32 card): saves ~60 KB of tables.
+  The complete original AudioMoth firmware (USB, GPS, filters, standard FatFS) takes ~150 KB.
+- Internal RAM: .data 192 B + .bss 14,112 B (+ 3 KB heap, stack at the end). External SRAM: 160,208 B of 262,144.
 
-## Simulatore (`tests/sim/`)
+## Simulator (`tests/sim/`)
 
-Esegue `main_app.c` e la pipeline vera (front-end, backbone TFLM, coda, `digitalfilter.c`) su un modello
-software dell'hardware (`hal_sim.c`): RTC e SD persistono tra gli avvii (ogni processo = un ciclo di
-accensione), il microfono legge un file audio (campioni a 384 kHz ricostruiti per il vero filtro di
-decimazione).
+Runs `main_app.c` and the real pipeline (front-end, TFLM backbone, tail, `digitalfilter.c`) on a software model of the
+hardware (`hal_sim.c`). RTC and SD persist across boots (each process = one power cycle); the microphone reads an audio
+file (384 kHz samples reconstructed for the real decimation filter).
 
     tests/sim/build_sim.sh TFLM_ROOT bird_backbone_int8.tflite
-    python tests/sim/make_audio.py audio.raw <file o cartelle audio>
+    python tests/sim/make_audio.py audio.raw <audio files or folders>
     python tests/sim/run_scenario.py tests/sim/out/bird_logger_sim audio.raw WORKDIR 2
     python tests/sim/verify_log.py WRENNET_ROOT best_distillation_model.pt WORKDIR
 
-Risultato (2 giorni simulati, orologio impostato a 06:58:30 da CONFIG.TXT): 28 avvii, 49 righe di log
-al giorno (una ogni 6 s, da 07:00:03 a 07:04:55), nessun errore; il resto del giorno solo risvegli
-orari. Sulle stesse 49 finestre PyTorch concorda sulla classe in 48 (il cambio ha confidenza 0,28);
-nomi di classe e percentuali nelle righe di log coincidono con i logit del dispositivo.
+Result (2 simulated days, clock set to 06:58:30 by CONFIG.TXT): 28 boots, 49 log lines per day (one every 6 s, from
+07:00:03 to 07:04:55), no errors; for the rest of the day only hourly wake-ups. On the same 49 windows PyTorch agrees on
+the class in 48 (the flipped one has confidence 0.28); class names and percentages in the log lines match the device logits.
 
-**Cosa NON modella**: temporizzazione ADC/DMA, parte analogica del microfono, driver SD reale, deriva
-dell'RTC, consumi, tempi con SRAM esterna, spegnimento reale. Il decimatore dell'AudioMoth somma 12
-campioni (media a blocchi), un anti-alias piu' povero del ricampionamento usato nel training
-(a 16 kHz circa -4 dB): differenza da tenere presente sul campo.
+**What it does NOT model**: ADC/DMA timing, the microphone's analogue stage, the real SD driver, RTC drift, power
+consumption, timing with external SRAM, the real power-down. The AudioMoth decimator sums 12 samples (block average),
+a poorer anti-alias filter than the resampling used in training (about -4 dB at 16 kHz): a difference to keep in mind in
+the field.
