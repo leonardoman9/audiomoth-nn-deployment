@@ -87,3 +87,10 @@ provato nel simulatore (differenza 0,044 da PyTorch). Build diagnostica `EXTRA_C
 Avvio e abilitazione della SRAM esterna sul chip; cattura DMA/ADC reale e livelli; driver SD reale; tempi e consumi veri (le stime sopra
 possono sbagliare di ~2x); accuratezza vera sul test set (dataset su Drive
 senza la partizione di test del training: ordine di `os.listdir` non riproducibile); divario di dominio con audio reale del dispositivo.
+
+## Compilatore: GNU Arm 10.3-2021.10 (quello del Makefile AudioMoth) vs 14.3.1
+TFLM (stesso commit + patch) e firmware ricompilati interamente con 10.3.1 20210824. **PASS**: 0 warning nella libreria e
+nel firmware (a parte i soliti stub newlib `_read`/`_lseek`), pipeline QEMU PCM->logits identica (max|d| vs host 0/1000,
+argmax uguale), stack 2.712 B. Flash: **239.608 B** con 10.3 contro **230.124 B** con 14.3 (+9,5 KB, margine 6,1 KB invece
+di 15,6 KB). La crescita e' distribuita nei kernel TFLM/CMSIS-NN (inlining diverso), non nel nostro codice.
+Scelta: si compila con 14.3.1 (toolchain scaricata da TFLM); 10.3 resta una alternativa funzionante.

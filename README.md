@@ -13,7 +13,8 @@ tests/            sim (host simulator), fstest (FatFS), schedule (1,805 cases), 
 tools/            table generators, QEMU instruction-count plugin, energy parser
 scripts/          setup_tflm.sh (fetch TFLM at the pinned commit + patch)
 docs/             VERIFICATION.md (all results), TFLM_BUILD.md, datasheets
-benchmarks/       Raspberry Pi benchmarks (earlier KWS-era work)
+benchmarks/       Raspberry Pi benchmarks (earlier KWS-era work; audio-model-int8.tflite, 41 MB, is not tracked:
+                  copy it from the archive or the pre-cleanup snapshot)
 ```
 
 Build: `scripts/setup_tflm.sh`, build the TFLM library (docs/TFLM_BUILD.md), then
