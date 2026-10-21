@@ -11,7 +11,8 @@ int main(void) {
     if (!strncmp(line, "parse ", 6)) {
       uint32_t s;
       const char* t = line + 6;
-      printf(Sched_ParseConfig(t, (uint32_t)strlen(t), &s) ? "%u\n" : "ERR\n", s);
+      const bool ok = Sched_ParseConfig(t, (uint32_t)strlen(t), &s);  /* not inside printf: argument order is unspecified */
+      if (ok) printf("%u\n", s); else printf("ERR\n");
     } else if (!strncmp(line, "fmt ", 4)) {
       char out[20];
       Sched_FormatTime((uint32_t)strtoul(line + 4, 0, 10), out);
