@@ -91,6 +91,13 @@ senza la partizione di test del training: ordine di `os.listdir` non riproducibi
 ## Compilatore: GNU Arm 10.3-2021.10 (quello del Makefile AudioMoth) vs 14.3.1
 TFLM (stesso commit + patch) e firmware ricompilati interamente con 10.3.1 20210824. **PASS**: 0 warning nella libreria e
 nel firmware (a parte i soliti stub newlib `_read`/`_lseek`), pipeline QEMU PCM->logits identica (max|d| vs host 0/1000,
-argmax uguale), stack 2.712 B. Flash: **239.608 B** con 10.3 contro **230.124 B** con 14.3 (+9,5 KB, margine 6,1 KB invece
-di 15,6 KB). La crescita e' distribuita nei kernel TFLM/CMSIS-NN (inlining diverso), non nel nostro codice.
-Scelta: si compila con 14.3.1 (toolchain scaricata da TFLM); 10.3 resta una alternativa funzionante.
+argmax uguale), stack 2.712 B.
+Flash a parita' di opzioni TFLM:
+
+| opzioni TFLM | GCC 14.3.1 | GCC 10.3.1 |
+|---|---|---|
+| `BUILD_TYPE=release` (kernel a -O2) | 244.620 B | 239.608 B |
+| + `KERNEL_OPTIMIZATION_LEVEL=-Os THIRD_PARTY_KERNEL_OPTIMIZATION_LEVEL=-Os OPTIMIZE_KERNELS_FOR=KERNELS_OPTIMIZED_FOR_SIZE` | **230.124 B** | **230.024 B** |
+
+Le opzioni di dimensione sono necessarie (senza, il margine scende sotto 1,2 KB con 14.3); con esse i due compilatori sono
+equivalenti (-100 B). Una prima versione di questa sezione confrontava 10.3 senza opzioni con 14.3 con opzioni: era sbagliata.
