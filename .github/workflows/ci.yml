@@ -13,7 +13,7 @@ jobs:
       matrix:
         # default = the bird model in firmware/bird/model; the others are generated test packages (tests/make_test_package.py)
         # with a different number of classes and window, to keep the firmware free of model-specific constants
-        package: [default, classes3, classes40]
+        package: [default, classes3, classes40, hop1_5]
     env:
       TFLM: third_party/tflite-micro
       ASAN_OPTIONS: detect_leaks=0
@@ -50,43 +50,15 @@ jobs:
           case "${{ matrix.package }}" in
             default)   P=firmware/bird/model ;;
             classes3)  P=/tmp/pkg; python3 tests/make_test_package.py $P 3 --window-start 13:30 --window-minutes 10 --confidence 70 ;;
-            classes40) P=/tmp/pkg; python3 tests/make_test_package.py $P 40 --window-start 23:50 --window-minutes 8 ;;
+            classes40) P=/tmp/pkg; python3 tests/make_test_package.py $P 40 --window-start 23:50 --window-minutes 8 ;;  # classified past midnight
+            hop1_5)    P=/tmp/pkg; python3 tests/make_test_package.py $P 9 --hop-seconds 1.5 ;;  # overlapping windows
           esac
           echo "MODEL_PKG=$(cd $P && pwd)" >> "$GITHUB_ENV"
           cat $P/model_config.json
 
-      - name: Schedule and log logic (with sanitizers)
-        run: |
-          clang -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -Ifirmware/app -I$MODEL_PKG/generated \
-            firmware/app/schedule.c tests/schedule/test_schedule.c -lm -o /tmp/test_schedule
-          python3 tests/schedule/test_schedule.py /tmp/test_schedule | tee /tmp/schedule.txt
-          grep -q "mismatches 0" /tmp/schedule.txt
-
-      - name: FatFS on a FAT32 image
-        run: |
-          MTOOLS_SKIP_CHECK=1 mformat -C -F -T 262144 -i /tmp/card.img ::
-          tests/fstest/run_fstest.sh /tmp/card.img $MODEL_PKG
-
-      - name: Firmware build and flash budget
-        run: |
-          firmware/app/build_app.sh $TFLM $MODEL_PKG | tee /tmp/build.txt
-          size=$(sed -n 's/^flash image: *\([0-9]*\) bytes.*/\1/p' /tmp/build.txt)
-          echo "flash: $size of 245760 bytes"
-          [ "$size" -le 245760 ]
-          EXTRA_CF=-DBIRD_DIAG_RECORD firmware/app/build_app.sh $TFLM $MODEL_PKG | grep "flash image"
-
-      - name: Simulator with sanitizers (2 days, fault scenarios)
-        run: |
-          SAN=1 OUTSUFFIX=_san tests/sim/build_sim.sh $TFLM $MODEL_PKG
-          python3 tests/sim/make_test_audio.py /tmp/audio.raw 60
-          python3 tests/sim/run_scenario.py tests/sim/out_san/bird_logger_sim /tmp/audio.raw /tmp/days 2 "2026-10-21 00:00:05" | tee /tmp/days.txt
-          python3 tests/sim/check_long_run.py /tmp/days 2026-10-21 2
-          python3 tests/sim/run_faults.py tests/sim/out_san/bird_logger_sim /tmp/audio.raw /tmp/faults
-
-      # the test vectors (one window + its expected logits) exist for the default model only
-      - name: Full pipeline on an emulated Cortex-M4F (QEMU)
-        if: matrix.package == 'default'
-        run: tests/qemu/run_qemu_pipeline.sh $TFLM python3 $MODEL_PKG
+      # the same script runs locally: scripts/run_tests.sh TFLM_ROOT [MODEL_PACKAGE]
+      - name: All tests (schedule, FatFS, builds and flash budget, simulator, faults, QEMU)
+        run: scripts/run_tests.sh $TFLM $MODEL_PKG
 
   # the single check required on main (branch protection): passes only if every package passed
   test:

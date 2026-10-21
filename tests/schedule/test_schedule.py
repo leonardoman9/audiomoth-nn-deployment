@@ -37,6 +37,36 @@ for bad in ["2026-02-30 07:00:00", "2026-04-31 07:00:00", "2027-02-29 07:00:00",
     cases.append(f"parse {bad}\n"); expect.append("ERR\n")
 for good, dt in [("2028-02-29 12:00:00", datetime.datetime(2028, 2, 29, 12)), ("  2026-10-21 06:58:30  ", datetime.datetime(2026, 10, 21, 6, 58, 30))]:
     cases.append(f"parse {good}\n"); expect.append(f"{unix(dt)}\n")
+# recording files, WAV header, window count, STATE.TXT and SESSIONS.TXT lines
+HOP = CFG.get("window_hop_samples", 96000)
+for _ in range(200):
+    dt = datetime.datetime(2020, 1, 1) + datetime.timedelta(seconds=rnd.randrange(0, 80 * 365 * 86400)); s = unix(dt)
+    cases.append(f"path {s}\n"); expect.append(f"{dt:%Y%m%d/%H%M%S}.WAV\n")
+    n = rnd.choice([0, 1, 95999, 96000, 96001, rnd.randrange(0, 40_000_000)])
+    cases.append(f"count {n}\n"); expect.append(f"{0 if n < 96000 else (n - 96000) // HOP + 1}\n")
+    # 512-byte header: RIFF, fmt, JUNK padding, data (the samples start on a sector)
+    hdr = (b"RIFF" + (504 + 2 * n).to_bytes(4, "little") + b"WAVEfmt " + (16).to_bytes(4, "little") + (1).to_bytes(2, "little")
+           + (1).to_bytes(2, "little") + (32000).to_bytes(4, "little") + (64000).to_bytes(4, "little") + (2).to_bytes(2, "little")
+           + (16).to_bytes(2, "little") + b"JUNK" + (460).to_bytes(4, "little") + bytes(460) + b"data" + (2 * n).to_bytes(4, "little"))
+    assert len(hdr) == 512
+    cases.append(f"wav {n}\n"); expect.append(hdr.hex() + "\n")
+    p = f"{dt:%Y%m%d/%H%M%S}.WAV"; samples = rnd.randrange(96000, 40_000_000); nxt = rnd.randrange(0, (samples - 96000) // HOP + 2)
+    gaps = rnd.randrange(0, samples + 1)
+    tries = rnd.randrange(0, 5)
+    for text in [f"REC {p} {s}", f"CLS {p} {s} {samples} {nxt} {gaps} {tries}", "DONE"]:
+        cases.append(f"state {text}\n"); expect.append(text + "\n")
+    w, secs = rnd.randrange(0, 10000), rnd.randrange(0, 100000)
+    cases.append(f"session {s} {samples} {gaps} {w} {secs}\n"); expect.append(f"{dt:%Y-%m-%d %H:%M:%S},{p},{samples // 32000},{gaps},{w},{secs}\n")
+too_far = (40_000_000 - 96000) // HOP + 2
+# the longest possible record still fits
+cases.append("state CLS 20261021/070000.WAV 4294967295 4294967295 4294967295 4294967295 4294967295\n"); expect.append("ERR\n")  # next > windows
+big = (4294967295 - 96000) // HOP + 1
+cases.append(f"state CLS 20261021/070000.WAV 4294967295 4294967295 {big} 4294967295 4294967295\n")
+expect.append(f"CLS 20261021/070000.WAV 4294967295 4294967295 {big} 4294967295 4294967295\n")
+for bad in ["REC 20261021/070000.WAV", "REC 20261021/07000.WAV 5", "CLS 20261021/070000.WAV 1 96000 2 0 0", f"CLS 20261021/070000.WAV 1 40000000 {too_far} 0 0",
+            "CLS 20261021/070000.WAV 1 96000 0 96001 0", "CLS 20261021/070000.WAV 1 96000 0 0", "CLS 2026102x/070000.WAV 1 96000 0 0 0", "XYZ 20261021/070000.WAV 1", "REC 20261021/070000.WAV 99999999999",
+            "REC 20261021/070000.TXT 1", "REC 20261021/070000.WAV 1 junk", "", "\xff\xfe"]:
+    cases.append(f"state {bad}\n"); expect.append("ERR\n")
 out = subprocess.run([S], input="".join(cases), capture_output=True, text=True).stdout
 bad = [(c, e, o) for c, e, o in zip(cases, expect, out.splitlines(keepends=True)) if e != o]
 print("cases", len(cases), "mismatches", len(bad)); print(bad[:2])

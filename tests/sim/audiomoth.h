@@ -35,6 +35,11 @@ bool AudioMoth_appendFile(char *filename);
 bool AudioMoth_writeToFile(void *bytes, uint16_t bytesToWrite);
 bool AudioMoth_openFile(char *filename);
 bool AudioMoth_closeFile(void);
+bool AudioMoth_seekInFile(uint32_t position);
+uint32_t AudioMoth_getFileSize(void);
+bool AudioMoth_syncFile(void);
+bool AudioMoth_doesDirectoryExist(char *folderName);
+bool AudioMoth_makeDirectory(char *folderName);
 
 /* Application callbacks (implemented by main_app.c, as in the real firmware). */
 extern void AudioMoth_handleSwitchInterrupt(void);

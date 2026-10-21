@@ -1,20 +1,16 @@
-"""Real timing from a LOG.TXT written by the board during the 07:00 session.
-Usage: python log_timing.py LOG.TXT
-Each line is stamped when a 3 s window has been recorded, just before it is classified, and the next window starts
-recording right after the classification. So the spacing between consecutive lines of one session is
-3 s of recording + the classification time (+ ~0.3 s for each LED blink after a confident window).
-The estimate from QEMU instruction counts was 6-8 s of classification, i.e. a spacing of ~9-11 s."""
-import collections, datetime, statistics, sys
+"""Real timing from SESSIONS.TXT written by the board (one line per session).
+Usage: python log_timing.py SESSIONS.TXT
+Each line is "<start>,<recording>,<seconds recorded>,<samples lost>,<windows>,<classification seconds>": the whole window
+is recorded first, then classified, so classification seconds / windows is the time the chip needs per 3 s window.
+The estimate from QEMU instruction counts was 6-8 s per window, i.e. ~10-13 minutes for the 100 windows of a 5-minute
+window. Samples lost > 0 means the SD card stalled for more than the 1.5 s recording buffer (try another card)."""
+import sys
 
-sessions = collections.defaultdict(list)
 for l in open(sys.argv[1], errors="replace"):
-    if l.startswith("REPLAY,") or len(l) < 19: continue
-    try: t = datetime.datetime.strptime(l[:19], "%Y-%m-%d %H:%M:%S")
-    except ValueError: continue
-    sessions[t.date()].append(t)
-for day, ts in sessions.items():
-    gaps = [(b - a).total_seconds() for a, b in zip(ts, ts[1:])]
-    if not gaps: print(f"{day}: {len(ts)} line(s), not enough to measure"); continue
-    med = statistics.median(gaps)
-    print(f"{day}: {len(ts)} windows, spacing median {med:.0f} s (min {min(gaps):.0f}, max {max(gaps):.0f})"
-          f" -> classification ~{med - 3:.0f} s per window, {len(ts)} windows in the 5-minute session")
+    f = l.strip().split(",")
+    if len(f) != 6: continue
+    start, path, rec, lost, windows, secs = f[0], f[1], int(f[2]), int(f[3]), int(f[4]), int(f[5])
+    per = secs / windows if windows else float("nan")
+    awake = rec + secs
+    print(f"{start} {path}: {rec} s recorded, {lost} samples lost ({lost / 32000:.2f} s), {windows} windows classified in"
+          f" {secs} s -> {per:.1f} s per window; awake ~{awake / 60:.1f} min for this session")

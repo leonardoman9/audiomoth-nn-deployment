@@ -1,7 +1,8 @@
 """Makes a model package with a different number of classes, to test that the firmware and the tests do not depend
 on the default model's 9 classes. The classifier rows are taken from the default package (cycled, with a different
 bias per row); everything else is copied. The weights mean nothing: use it for plumbing tests only.
-Usage: python make_test_package.py OUT_DIR N_CLASSES [--window-start HH:MM] [--window-minutes M] [--confidence PCT]"""
+Usage: python make_test_package.py OUT_DIR N_CLASSES [--window-start HH:MM] [--window-minutes M] [--confidence PCT]
+                                   [--hop-seconds S]"""
 import argparse, re, shutil, subprocess, sys
 from pathlib import Path
 
@@ -10,6 +11,7 @@ SRC = ROOT / "firmware/bird/model"
 p = argparse.ArgumentParser()
 p.add_argument("out"); p.add_argument("classes", type=int)
 p.add_argument("--window-start", default="07:00"); p.add_argument("--window-minutes", default="5"); p.add_argument("--confidence", default="50")
+p.add_argument("--hop-seconds", default="3")
 a = p.parse_args()
 out, n = Path(a.out), a.classes
 shutil.rmtree(out, ignore_errors=True)
@@ -34,4 +36,5 @@ hdr.write_text(text)
 
 names = ",".join([f"Species {i:02d}" for i in range(n - 1)] + ["background"])
 subprocess.run([sys.executable, str(ROOT / "firmware/bird/gen_model_config.py"), str(out), "--names", names,
-                "--window-start", a.window_start, "--window-minutes", a.window_minutes, "--confidence", a.confidence], check=True)
+                "--window-start", a.window_start, "--window-minutes", a.window_minutes, "--confidence", a.confidence,
+                "--hop-seconds", a.hop_seconds], check=True)

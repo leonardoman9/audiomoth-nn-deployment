@@ -14,5 +14,6 @@
   "negative": 8,
   "window_start_s": 25200,
   "window_length_s": 300,
+  "window_hop_samples": 96000,
   "confidence_pct": 50
 }

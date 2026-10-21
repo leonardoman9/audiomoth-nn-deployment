@@ -224,6 +224,7 @@ bool AudioMoth_readFile(char *buffer, uint32_t bufferSize);
 bool AudioMoth_appendFile(char *filename);
 
 bool AudioMoth_seekInFile(uint32_t position);
+uint32_t AudioMoth_getFileSize(void);  /* size of the open file (added for the WrenNet logger) */
 bool AudioMoth_writeToFile(void *bytes, uint16_t bytesToWrite);
 
 bool AudioMoth_renameFile(char *originalFilename, char *newFilename);

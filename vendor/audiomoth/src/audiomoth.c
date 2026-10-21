@@ -2783,6 +2783,14 @@ bool AudioMoth_seekInFile(uint32_t position) {
 
 }
 
+uint32_t AudioMoth_getFileSize(void) {
+
+    /* Added for the WrenNet logger: readFile() does not report how many bytes it read */
+
+    return (uint32_t)f_size(&file);
+
+}
+
 bool AudioMoth_writeToFile(void *bytes, uint16_t bytesToWrite) {
 
     FRESULT res = f_write(&file, bytes, bytesToWrite, &bw);

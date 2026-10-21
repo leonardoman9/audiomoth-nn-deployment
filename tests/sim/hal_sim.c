@@ -8,14 +8,25 @@
  * What it does NOT model: ADC/DMA timing jitter, analog front-end, real SD driver, RTC drift,
  * power consumption, clocks, external SRAM wait states.
  *
+ * The SD card is a folder (SIM_DIR/sd). File calls behave like the library's FatFS wrappers: readFile() succeeds
+ * on a short read, one file is open at a time, appendFile() opens read/write at the end, doesFileExist() and
+ * doesDirectoryExist() are f_stat (true for a file or a folder). A failed write leaves half of its bytes on the card
+ * and the file object in error (writes, seeks and syncs fail) until the file is opened again, as FatFS's fp->err.
+ * Each SD write takes 1 ms of simulated time (SIM_SD_WRITE_MS to change it), during which the microphone keeps
+ * delivering samples; a card busy for more than 500 ms fails the write, as the SD driver's timeout does. Opening a
+ * file takes SIM_SD_OPEN_MS (default 0).
+ *
  * SIM_FAULT (comma-separated) injects failures for this boot: nosd (file system never mounts), nosram (external
  * SRAM does not enable), writefail (every SD write fails), appendfail (LOG.TXT cannot be opened), pipefail
- * (classification fails), powercut=MS (power lost MS ms after boot: the clock is lost, unflushed data too),
- * reset=MS (watchdog-style reset MS ms after boot: the clock survives).
+ * (classification fails), powercut=MS (power lost MS ms after boot: the clock is lost, unsynced data too),
+ * reset=MS (reset MS ms after boot, e.g. watchdog or brown-out: as on the board, any reset but an EM4 wake-up loses
+ * the clock, and unsynced data is lost), sdstall=MS (the 50th SD write of the boot takes MS ms; more than 500 fails),
+ * wfail=K (the K-th SD write of the boot fails), diskfull=BYTES (the card has room for BYTES more bytes).
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "audiomoth.h"
@@ -33,10 +44,12 @@ static int16_t *dma_primary, *dma_secondary;
 static bool dma_next_is_primary = true, mic_on;
 static double ms_residual;
 static FILE *file;
+static long synced_size;  /* size of the open file at its last open/sync: what survives a power cut */
 static int window_index;
 static FILE *window_pcm;
 static bool f_nosd, f_nosram, f_writefail, f_appendfail, f_pipefail;
-static long f_powercut_ms = -1, f_reset_ms = -1;
+static long f_powercut_ms = -1, f_reset_ms = -1, f_sdstall_ms = -1, f_wfail = -1, f_diskfull = -1, sd_write_ms = 1, sd_open_ms = 0, sd_writes;
+static bool file_err;  /* FatFS fp->err: set by a failed write, cleared when a file is opened */
 static uint64_t boot_ms;
 
 static void Path(char *out, const char *sub, const char *name) { snprintf(out, 1024, "%s/%s%s%s", dir, sub, sub[0] ? "/" : "", name); }
@@ -76,7 +89,14 @@ __attribute__((constructor)) static void SimInit(void) {
         f_pipefail = strstr(fault, "pipefail") != NULL;
         const char *c = strstr(fault, "powercut="); if (c) f_powercut_ms = atol(c + 9);
         const char *r = strstr(fault, "reset="); if (r) f_reset_ms = atol(r + 6);
+        const char *st = strstr(fault, "sdstall="); if (st) f_sdstall_ms = atol(st + 8);
+        const char *wf = strstr(fault, "wfail="); if (wf) f_wfail = atol(wf + 6);
+        const char *df = strstr(fault, "diskfull="); if (df) f_diskfull = atol(df + 9);
     }
+    const char *wm = getenv("SIM_SD_WRITE_MS");
+    if (wm) sd_write_ms = atol(wm);
+    const char *om = getenv("SIM_SD_OPEN_MS");  /* time to open a file (a slow card, a long cluster chain) */
+    if (om) sd_open_ms = atol(om);
     boot_ms = now_ms;
 }
 
@@ -86,11 +106,15 @@ static void CheckCut(void) {
         char p[1024];
         Path(p, "", "rtc.state");
         remove(p);  /* datasheet: the time is lost when power is lost */
+        if (file && ftruncate(fileno(file), synced_size) != 0) perror("ftruncate");  /* unsynced writes are lost */
         printf("SIM: POWER_CUT\n"); fflush(stdout);
         _exit(0);
     }
     if (f_reset_ms >= 0 && now_ms - boot_ms >= (uint64_t)f_reset_ms) {
-        SaveState();
+        char p[1024];
+        Path(p, "", "rtc.state");
+        remove(p);  /* audiomoth.c: a reset other than an EM4 wake-up clears the time and the "clock set" flag */
+        if (file && ftruncate(fileno(file), synced_size) != 0) perror("ftruncate");  /* RAM buffers are lost */
         printf("SIM: RESET\n"); fflush(stdout);
         _exit(0);
     }
@@ -131,8 +155,8 @@ void AudioMoth_delay(uint32_t ms) { AdvanceMs(ms); }
 void AudioMoth_sleep(void) { if (mic_on) Advance(2000); else AdvanceMs(1); }
 
 void AudioMoth_powerDownAndWake(uint32_t seconds, bool synchronised) {
-    (void)synchronised;
     now_ms += (uint64_t)seconds * 1000u;
+    if (synchronised && seconds > 0) now_ms -= now_ms % 1000u;  /* as the library: wakes on a whole second of the BURTC */
     SaveState();
     printf("SIM: POWER_DOWN wake_after=%u\n", seconds);
     exit(0);
@@ -148,13 +172,66 @@ void AudioMoth_startMicrophoneSamples(uint32_t rate) { (void)rate; mic_on = true
 
 bool AudioMoth_enableFileSystem(AM_sdCardSpeed_t s) { (void)s; return !f_nosd; }
 void AudioMoth_disableFileSystem(void) {}
-bool AudioMoth_doesFileExist(char *name) { char p[1024]; Path(p, "sd", name); FILE *f = fopen(p, "rb"); if (f) fclose(f); return f != NULL; }
-bool AudioMoth_openFileToRead(char *name) { char p[1024]; Path(p, "sd", name); file = fopen(p, "rb"); return file != NULL; }
-bool AudioMoth_readFile(char *buf, uint32_t size) { return file && fread(buf, 1, size, file) > 0; }
-bool AudioMoth_appendFile(char *name) { if (f_appendfail) return false; char p[1024]; Path(p, "sd", name); file = fopen(p, "ab"); return file != NULL; }
-bool AudioMoth_writeToFile(void *bytes, uint16_t n) { return !f_writefail && file && fwrite(bytes, 1, n, file) == n; }
-bool AudioMoth_closeFile(void) { if (file) fclose(file); file = NULL; return true; }
-bool AudioMoth_openFile(char *name) { char p[1024]; Path(p, "sd", name); file = fopen(p, "wb"); return file != NULL; }  /* create/truncate, as FA_CREATE_ALWAYS */
+/* The library has one FIL: opening a file while another is open would silently corrupt the first one on the board. */
+static void OneFileAtATime(const char *name) {
+    if (sd_open_ms > 0) AdvanceMs((uint32_t)sd_open_ms);
+    if (file) { fprintf(stderr, "SIM: %s opened while another file is open (the library has a single file object)\n", name); exit(3); }
+}
+static bool Exists(const char *p) { struct stat s; return stat(p, &s) == 0; }  /* f_stat: file or folder */
+static bool IsFolder(const char *p) { struct stat s; return stat(p, &s) == 0 && S_ISDIR(s.st_mode); }  /* f_open refuses these */
+bool AudioMoth_doesFileExist(char *name) { char p[1024]; Path(p, "sd", name); return Exists(p); }
+bool AudioMoth_openFileToRead(char *name) { OneFileAtATime(name); char p[1024]; Path(p, "sd", name); if (IsFolder(p)) return false; file = fopen(p, "rb"); file_err = false; return file != NULL; }
+/* FatFS f_read: FR_OK on a short read or at the end of the file; the caller cannot tell how much was read. */
+bool AudioMoth_readFile(char *buf, uint32_t size) { if (!file) return false; size_t got = fread(buf, 1, size, file); (void)got; return !ferror(file); }
+bool AudioMoth_appendFile(char *name) {  /* FA_OPEN_ALWAYS | FA_WRITE | FA_READ, then seek to the end */
+    OneFileAtATime(name);
+    if (f_appendfail && !strcmp(name, "LOG.TXT")) return false;
+    char p[1024]; Path(p, "sd", name);
+    if (IsFolder(p)) return false;
+    file_err = false;
+    file = fopen(p, "r+b");
+    if (!file) file = fopen(p, "w+b");
+    if (!file || fseek(file, 0, SEEK_END) != 0) return false;
+    synced_size = ftell(file);
+    return true;
+}
+bool AudioMoth_writeToFile(void *bytes, uint16_t n) {
+    if (f_writefail || !file || file_err) return false;
+    sd_writes += 1;
+    const long busy = sd_writes == 50 && f_sdstall_ms > 0 ? f_sdstall_ms : sd_write_ms;
+    const bool fails = busy > 500 || sd_writes == f_wfail;
+    AdvanceMs((uint32_t)(busy > 500 ? 500 : busy));
+    if (fails) {  /* aborted after part of the data: FR_DISK_ERR, sticky */
+        if (fwrite(bytes, 1, (size_t)((n / 2) | 1), file) == 0) perror("fwrite");
+        file_err = true;
+        return false;
+    }
+    if (f_diskfull >= 0) {  /* full card: FR_OK with fewer bytes written (not sticky); overwriting needs no room */
+        const long pos = ftell(file);
+        fseek(file, 0, SEEK_END); const long size = ftell(file); fseek(file, pos, SEEK_SET);
+        const long grow = pos + n > size ? pos + n - size : 0;
+        const long ok_bytes = grow <= f_diskfull ? n : n - (grow - f_diskfull);
+        if (ok_bytes > 0 && fwrite(bytes, 1, (size_t)ok_bytes, file) != (size_t)ok_bytes) return false;
+        f_diskfull -= grow <= f_diskfull ? grow : f_diskfull;
+        return ok_bytes == n;
+    }
+    return fwrite(bytes, 1, n, file) == n;
+}
+bool AudioMoth_closeFile(void) { if (file) fclose(file); file = NULL; synced_size = 0; file_err = false; return true; }
+bool AudioMoth_openFile(char *name) { OneFileAtATime(name); char p[1024]; Path(p, "sd", name); if (IsFolder(p)) return false; file = fopen(p, "w+b"); synced_size = 0; file_err = false; return file != NULL; }  /* FA_CREATE_ALWAYS | FA_WRITE | FA_READ */
+bool AudioMoth_seekInFile(uint32_t position) { return file && !file_err && fseek(file, (long)position, SEEK_SET) == 0; }
+uint32_t AudioMoth_getFileSize(void) {
+    if (!file) return 0;
+    long here = ftell(file); fseek(file, 0, SEEK_END); long size = ftell(file); fseek(file, here, SEEK_SET);
+    return (uint32_t)size;
+}
+bool AudioMoth_syncFile(void) {  /* unsynced data is what a power cut loses */
+    if (!file || fflush(file) != 0) return false;  /* f_sync does not check fp->err: the size reaches the card */
+    long here = ftell(file); fseek(file, 0, SEEK_END); synced_size = ftell(file); fseek(file, here, SEEK_SET);
+    return true;
+}
+bool AudioMoth_doesDirectoryExist(char *name) { char p[1024]; Path(p, "sd", name); return Exists(p); }
+bool AudioMoth_makeDirectory(char *name) { if (f_writefail) return false; char p[1024]; Path(p, "sd", name); return mkdir(p, 0755) == 0; }
 
 /* Pipeline wrappers: dump every window's PCM and logits, and charge the classification time. */
 void sim_BirdPipeline_Begin(void) {

@@ -1,9 +1,11 @@
 """Writes the class list and application settings of a model package.
 Usage: python gen_model_config.py PACKAGE_DIR --names "A,B,C" [--negative INDEX|none]
-                                  [--window-start HH:MM] [--window-minutes M] [--confidence PCT]
+                                  [--window-start HH:MM] [--window-minutes M] [--hop-seconds S] [--confidence PCT]
   --names      class names in the model's OUTPUT INDEX order, comma-separated (ASCII, no commas, <= 40 chars each)
   --negative   index of the "nothing of interest" class (default: the last one); 'none' if the model has none
   --window-*   daily classification window on the device clock (default 07:00, 5 minutes)
+  --hop-seconds step between classified 3 s windows of the recording, 1-3 s (default 3 = no overlap; 1.5 = half
+               overlap, twice the windows and the classification time)
   --confidence a top class below this probability (%) is logged as uncertain (default 50)
 Writes PACKAGE_DIR/generated/model_config.h (firmware) and PACKAGE_DIR/model_config.json (tests and tools).
 A model package is a folder with one .tflite (the int8 backbone), generated/ (C headers) and model_config.json.
@@ -17,6 +19,7 @@ p.add_argument("--names", required=True)
 p.add_argument("--negative", default="last")
 p.add_argument("--window-start", default="07:00")
 p.add_argument("--window-minutes", type=int, default=5)
+p.add_argument("--hop-seconds", type=float, default=3.0)
 p.add_argument("--confidence", type=int, default=50)
 a = p.parse_args()
 
@@ -34,6 +37,16 @@ length = a.window_minutes * 60
 if not (0 <= h < 24 and 0 <= m < 60 and 60 <= length and start + length <= 86400):
     raise SystemExit("the window must be at least 1 minute and end before midnight")
 if not 1 <= a.confidence <= 100: raise SystemExit("--confidence must be 1-100")
+hop = round(a.hop_seconds * 32000)
+if not (32000 <= hop <= 96000 and abs(hop - a.hop_seconds * 32000) < 1e-6):
+    raise SystemExit("--hop-seconds must be 1-3 (each window then has its own second in LOG.TXT)")
+# The window is recorded, then classified: both must end before the next day's window (12 s per window: a margin over
+# the 6-8 s estimated from QEMU instruction counts, to be measured on the board). This also keeps a recording far
+# below FAT32's 4 GB per file.
+windows = (length * 32000 - 96000) // hop + 1
+if length + 12 * windows > 86400 - 600:
+    raise SystemExit(f"window of {a.window_minutes} min with a {a.hop_seconds} s hop: {windows} windows, ~{12 * windows // 60} min"
+                     " of classification after the recording; recording + classification must fit in a day")
 
 pkg = Path(a.package)
 (pkg / "generated").mkdir(parents=True, exist_ok=True)
@@ -47,10 +60,12 @@ pkg = Path(a.package)
 #define MODEL_NEGATIVE_CLASS {negative}  /* "nothing of interest" class, -1 if none */
 #define APP_WINDOW_START_S   {start}u
 #define APP_WINDOW_LENGTH_S  {length}u
+#define APP_WINDOW_HOP_SAMPLES {hop}u  /* step between classified windows of the recording */
 #define APP_CONFIDENCE_PCT   {a.confidence}
 #endif
 """)
 cfg = {"classes": len(names), "names": names, "negative": negative,
-       "window_start_s": start, "window_length_s": length, "confidence_pct": a.confidence}
+       "window_start_s": start, "window_length_s": length, "window_hop_samples": hop,
+       "confidence_pct": a.confidence}
 (pkg / "model_config.json").write_text(json.dumps(cfg, indent=2) + "\n")
-print(f"{pkg}: {len(names)} classes, negative {negative}, window {a.window_start} for {a.window_minutes} min")
+print(f"{pkg}: {len(names)} classes, negative {negative}, window {a.window_start} for {a.window_minutes} min, hop {a.hop_seconds} s")
